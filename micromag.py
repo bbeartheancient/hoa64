@@ -112,7 +112,7 @@ def micromag_ils_robust(order, T_start=20.0, n_flip=3, sa_steps=20000,
     while it < restarts:
         if time_budget and time.monotonic() - t0 > time_budget:
             break
-        H, st = micromag_sa(order, T_start=T_start, n_flip=n_flip,
+        H, st = micromag_sa(order, T_start=T_start, n_swap=n_flip,
                             max_steps=sa_steps, rng=rng)
         G = H.astype(np.float64) @ H.astype(np.float64).T
         f = float(np.sum((G - order * np.eye(order)) ** 2)) / 2.0

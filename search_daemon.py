@@ -42,7 +42,7 @@ def known_orders():
 
 def try_micromag(order, budget=60):
     from hoa64.micromag import micromag_ils_robust
-    H, _, ok = micromag_ils_robust(order, T_start=15.0, n_swap=3,
+    H, _, ok = micromag_ils_robust(order, T_start=15.0, n_flip=3,
                                     sa_steps=5000, restarts=5,
                                     time_budget=budget,
                                     rng=np.random.default_rng())
