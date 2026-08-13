@@ -130,6 +130,18 @@ def main():
                     filled += 1
                     print(f"  [{cycle:03d}] H({gap:5d}) via {method:>20s} → {path}",
                           flush=True)
+                    # auto-cascade Kronecker multiples
+                    for mult in [2, 4, 8]:
+                        cascade_n = gap * mult
+                        if cascade_n in known:
+                            continue
+                        Hc = hadamard_known(cascade_n)
+                        if Hc is not None and verify(Hc):
+                            pc = export_csv(cascade_n, Hc)
+                            known.add(cascade_n)
+                            filled += 1
+                            print(f"  [{cycle:03d}] H({cascade_n:5d}) via {mult}x{gap} cascade → {pc}",
+                                  flush=True)
 
             if filled > 0:
                 continue
