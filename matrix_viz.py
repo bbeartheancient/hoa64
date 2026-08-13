@@ -59,8 +59,6 @@ def build_williamson(order):
     if order % 4 != 0:
         return None
     k = order // 4
-    from hoa64.williamson import williamson_type_quadruples_smallcases
-    # Use the SageMath Williamson DB data we ported
     will_db = {1:('+','+','+','+'),3:('+++','+--','+--','+--'),
                5:('+-++-','++--+','+----','+----'),
                7:('+--++--','+-+--+-','++----+','+------'),
@@ -96,14 +94,17 @@ def build_cw(order):
 def build_micromag(order):
     if order < 4 or order % 4 != 0:
         return None
-    from hoa64.micromag import micromag_ils
-    H, _, ok = micromag_ils(order, lam_ex=0.01, lam_ani=0.1,
-                            inner_flips=2000, outer_iters=3, time_budget=10,
-                            rng=np.random.default_rng())
-    if ok and H is not None:
-        from hoa64.hadamard import verify
-        if verify(H):
-            return normalize(H)
+    try:
+        from hoa64.micromag import micromag_ils
+        H, _, ok = micromag_ils(order, lam_ex=0.01, lam_ani=0.1,
+                                inner_flips=1000, outer_iters=2, time_budget=3,
+                                rng=np.random.default_rng())
+        if ok and H is not None:
+            from hoa64.hadamard import verify
+            if verify(H):
+                return normalize(H)
+    except Exception:
+        pass
     return None
 
 
