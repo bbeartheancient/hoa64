@@ -121,7 +121,8 @@ def main():
             filled = 0
 
             # Scan a few gaps per cycle (ascending)
-            for gap in gaps[:10]:
+            print(f"  [{cycle:03d}] scanning {len(gaps[:5])} gaps...", end=" ", flush=True)
+            for gap in gaps[:5]:
                 H, method = try_build(gap, known)
                 if H is not None and gap not in known:
                     path = export_csv(gap, H)
@@ -136,6 +137,7 @@ def main():
             # RNN‑guided micromag search on hardest gaps
             if rnn_model is not None and cycle % 3 == 0:
                 for gap in gaps[:3]:
+                    if gap > 500: continue  # RNN search too slow for large orders
                     from hoa64.rnn_hadamard import rnn_guided_search
                     H, best_f = rnn_guided_search(
                         gap, rnn_model, n_trials=5, search_flips=2000)
