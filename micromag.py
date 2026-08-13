@@ -38,55 +38,66 @@ def total_energy(H, lam_ex=0.0, lam_dem=1.0, lam_ani=0.0):
             E_exch, E_dem, E_anis)
 
 
-def micromag_sa(order, T_start=10.0, T_end=0.01, cooling=0.999, max_steps=50000,
-                lam_ex=0.0, lam_ani=0.0, n_flip=2, rng=None):
-    """Simulated annealing micromag search with multi‑flip moves.
+def _swap_pair(H, rng):
+    """Exchange a random +1 and a random -1 in the interior.
+    Preserves total polarity count exactly (n(n+1)/2 positives)."""
+    n = H.shape[0]
+    interior = H[1:, 1:]
+    pos = np.argwhere(interior == 1)
+    neg = np.argwhere(interior == -1)
+    if len(pos) == 0 or len(neg) == 0:
+        return False
+    pi = int(rng.integers(0, len(pos)))
+    ni = int(rng.integers(0, len(neg)))
+    rp, cp = pos[pi]; rn, cn = neg[ni]
+    H[rp+1, cp+1] = -1; H[rn+1, cn+1] = 1
+    return True
 
-    n_flip: number of cells to flip simultaneously (2 = pair flip, preserves
-            row/column balance better than single flip).
+
+def micromag_sa(order, T_start=10.0, T_end=0.01, cooling=0.999, max_steps=50000,
+                lam_ex=0.0, lam_ani=0.0, n_swap=3, rng=None):
+    """Simulated annealing micromag search with swap moves.
+
+    n_swap: number of (+1, -1) swaps per proposal.
+    Swaps preserve the total polarity count exactly.
     """
     rng = rng or np.random.default_rng()
     H = random_seed(order, rng).astype(np.int8)
     n = H.shape[0]
     E_cur, _, _, _ = total_energy(H, lam_ex=lam_ex, lam_ani=lam_ani)
-    best_H = H.copy()
-    best_E = E_cur
+    best_H = H.copy(); best_E = E_cur
 
-    T = T_start
-    steps = 0
-    accepts = 0
-    t0 = time.monotonic()
+    T = T_start; steps = 0; accepts = 0; t0 = time.monotonic()
 
     while steps < max_steps and T > T_end:
-        # Select n_flip random interior cells
-        rows = rng.integers(1, n, size=n_flip)
-        cols = rng.integers(1, n, size=n_flip)
+        # Save current state for undo
+        H_save = H.copy()
 
-        # Flip them
-        H[rows, cols] *= -1
+        # Perform n_swap exchanges
+        ok = True
+        for _ in range(n_swap):
+            if not _swap_pair(H, rng):
+                ok = False; break
+
+        if not ok:
+            H = H_save; steps += 1; continue
 
         E_new, _, _, _ = total_energy(H, lam_ex=lam_ex, lam_ani=lam_ani)
         delta = E_new - E_cur
 
         if delta < 0 or rng.random() < math.exp(-delta / max(T, 1e-10)):
-            # Accept
-            E_cur = E_new
-            accepts += 1
+            E_cur = E_new; accepts += 1
             if E_cur < best_E:
-                best_H = H.copy()
-                best_E = E_cur
+                best_H = H.copy(); best_E = E_cur
         else:
-            # Reject — undo
-            H[rows, cols] *= -1
+            H = H_save
 
         steps += 1
         T *= cooling
 
     elapsed = time.monotonic() - t0
-    return best_H, dict(
-        steps=steps, accepts=accepts, best_E=best_E,
-        elapsed_s=elapsed, hadamard=(best_E < 1e-6)
-    )
+    return best_H, dict(steps=steps, accepts=accepts, best_E=best_E,
+                         elapsed_s=elapsed, hadamard=(best_E < 1e-6))
 
 
 def micromag_ils_robust(order, T_start=20.0, n_flip=3, sa_steps=20000,

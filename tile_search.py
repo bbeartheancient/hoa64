@@ -26,12 +26,29 @@ def total_energy_fast(H):
     return E
 
 
-def tile_sa(order, T_start=20.0, T_end=0.01, cooling=0.9995,
-            max_steps=20000, rng=None):
-    """Tile‑based simulated annealing.
+def _swap_random(H, rng):
+    """Exchange a random +1 and a random -1 in the interior.
+    Preserves the total count of each polarity exactly."""
+    n = H.shape[0]
+    interior = H[1:, 1:]
+    pos = np.argwhere(interior == 1)
+    neg = np.argwhere(interior == -1)
+    if len(pos) == 0 or len(neg) == 0:
+        return False
+    pi = int(rng.integers(0, len(pos)))
+    ni = int(rng.integers(0, len(neg)))
+    rp, cp = pos[pi]; rn, cn = neg[ni]
+    rp += 1; cp += 1; rn += 1; cn += 1  # back to full indices
+    H[rp, cp] = -1; H[rn, cn] = 1
+    return True
 
-    Each proposal: pick a random 2×2 interior tile and flip all 4 cells.
-    This is equivalent to swapping an H2 type A ↔ type B locally.
+
+def tile_sa_swap(order, T_start=20.0, T_end=0.01, cooling=0.9995,
+                 max_steps=20000, rng=None):
+    """Tile‑based SA using swap moves (preserves polarity count).
+
+    Each proposal: pick two random interior tiles, flip both simultaneously.
+    This preserves the total +1/−1 count and the H2 cell structure.
     """
     rng = rng or np.random.default_rng()
     H = random_seed(order, rng).astype(np.int8)
@@ -42,13 +59,14 @@ def tile_sa(order, T_start=20.0, T_end=0.01, cooling=0.9995,
     T = T_start; steps = 0; accepts = 0; t0 = time.monotonic()
 
     while steps < max_steps and T > T_end:
-        # pick random 2×2 tile in interior (avoid row0/col0 border)
-        i = int(rng.integers(1, n - 1))  # top row of tile
-        j = int(rng.integers(1, n - 1))  # left col of tile
+        # pick two different random interior tiles and flip both
+        i1 = int(rng.integers(1, n - 1)); j1 = int(rng.integers(1, n - 1))
+        i2 = int(rng.integers(1, n - 1)); j2 = int(rng.integers(1, n - 1))
+        if i1 == i2 and j1 == j2:
+            continue
 
-        # flip all 4 cells
-        H[i, j] *= -1; H[i, j + 1] *= -1
-        H[i + 1, j] *= -1; H[i + 1, j + 1] *= -1
+        H[i1, j1] *= -1; H[i1, j1+1] *= -1; H[i1+1, j1] *= -1; H[i1+1, j1+1] *= -1
+        H[i2, j2] *= -1; H[i2, j2+1] *= -1; H[i2+1, j2] *= -1; H[i2+1, j2+1] *= -1
 
         E_new = total_energy_fast(H)
         delta = E_new - E_cur
@@ -58,8 +76,8 @@ def tile_sa(order, T_start=20.0, T_end=0.01, cooling=0.9995,
             if E_cur < best_E:
                 best_H = H.copy(); best_E = E_cur
         else:
-            H[i, j] *= -1; H[i, j + 1] *= -1
-            H[i + 1, j] *= -1; H[i + 1, j + 1] *= -1
+            H[i1, j1] *= -1; H[i1, j1+1] *= -1; H[i1+1, j1] *= -1; H[i1+1, j1+1] *= -1
+            H[i2, j2] *= -1; H[i2, j2+1] *= -1; H[i2+1, j2] *= -1; H[i2+1, j2+1] *= -1
 
         steps += 1
         T *= cooling
@@ -75,7 +93,7 @@ def tile_ils(order, T_start=20.0, cooling=0.9995, sa_steps=15000,
     best_H = None; best_f = None; it = 0; t0 = time.monotonic()
     while it < restarts:
         if time_budget and time.monotonic() - t0 > time_budget: break
-        H, st = tile_sa(order, T_start=T_start, cooling=cooling,
+        H, st = tile_sa_swap(order, T_start=T_start, cooling=cooling,
                         max_steps=sa_steps, rng=rng)
         G = H.astype(np.float64) @ H.astype(np.float64).T
         f = float(np.sum((G - order * np.eye(order)) ** 2)) / 2.0
