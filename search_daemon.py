@@ -41,11 +41,11 @@ def known_orders():
 
 
 def try_micromag(order, budget=60):
-    from hoa64.micromag import micromag_ils
-    H, _, ok = micromag_ils(order, lam_ex=0.0, lam_ani=0.0,
-                            inner_flips=5000, outer_iters=10,
-                            time_budget=budget,
-                            rng=np.random.default_rng())
+    from hoa64.micromag import micromag_ils_robust
+    H, _, ok = micromag_ils_robust(order, T_start=15.0, n_swap=3,
+                                    sa_steps=5000, restarts=5,
+                                    time_budget=budget,
+                                    rng=np.random.default_rng())
     if ok and H is not None and verify(H):
         return normalize(H), "micromag"
     return None, None
@@ -86,8 +86,20 @@ def try_maxdet(order, budget=60):
     return None, None
 
 
+def try_tile(order, budget=60):
+    from hoa64.tile_search import tile_ils
+    H, _, ok = tile_ils(order, T_start=20.0, sa_steps=5000,
+                         restarts=5, time_budget=budget,
+                         rng=np.random.default_rng())
+    if ok and H is not None:
+        from hoa64.hadamard import normalize
+        return normalize(H), "tile_swap"
+    return None, None
+
+
 ENGINES = [
     ("micromag", try_micromag),
+    ("tile_swap", try_tile),
     ("gs_circulant", try_gs_circulant),
     ("williamson", try_williamson),
     ("maxdet", try_maxdet),
