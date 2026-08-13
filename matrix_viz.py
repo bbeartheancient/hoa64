@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 
 ALGORITHMS = ["sylvester", "paleyI", "paleyII", "miyamoto", "williamson",
-              "cw", "gs_circulant", "all"]
+              "cw", "micromag", "gs_circulant", "all"]
 
 
 def build_sylvester(n):
@@ -91,6 +91,20 @@ def build_cw(order):
     return None
 
 
+def build_micromag(order):
+    if order < 4 or order % 4 != 0:
+        return None
+    from hoa64.micromag import micromag_ils
+    H, _, ok = micromag_ils(order, lam_ex=0.01, lam_ani=0.1,
+                            inner_flips=2000, outer_iters=3, time_budget=10,
+                            rng=np.random.default_rng())
+    if ok and H is not None:
+        from hoa64.hadamard import verify
+        if verify(H):
+            return normalize(H)
+    return None
+
+
 def build_gs_circ(order):
     if order % 4 != 0:
         return None
@@ -105,7 +119,7 @@ def build_gs_circ(order):
 
 def build_all(order):
     for fn in [build_sylvester, build_paleyI, build_miyamoto,
-               build_williamson, build_cw, build_gs_circ]:
+               build_williamson, build_cw, build_micromag, build_gs_circ]:
         H = fn(order)
         if H is not None:
             return H
@@ -119,6 +133,7 @@ BUILDERS = {
     "miyamoto": build_miyamoto,
     "williamson": build_williamson,
     "cw": build_cw,
+    "micromag": build_micromag,
     "gs_circulant": build_gs_circ,
     "all": build_all,
 }
