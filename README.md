@@ -8,8 +8,8 @@ descent, FFT‑based PSD minimization, signature‑guided RNN search), and
 direct integration with SageMath for orders above 2000.
 
 **807 orders verified up to order 3984.  All known Hadamard matrices below
-2000 are constructible except 3 (1212, 1852, 1940) which have proven
-existence but inaccessible construction data.**
+2000 are constructible except 3 (1212, 1852, 1940) which have been proven
+to exist but have inaccessible construction data.**
 
 ## Quick Start
 
