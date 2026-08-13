@@ -12,6 +12,8 @@ Algorithms: Sylvester, PaleyI, PaleyII, Miyamoto, Williamson, CW,
 import os, sys, time, math
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import numpy as np
 
 ALGORITHMS = ["sylvester", "paleyI", "paleyII", "miyamoto", "williamson",
