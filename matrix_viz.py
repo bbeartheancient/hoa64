@@ -205,7 +205,7 @@ def evolve(algo_name, max_order=128, fps=3):
     os.system("clear" if sys.platform != "win32" else "cls")
     print(f"Algorithm: {algo_name} — Final State")
     print(f"  Built: {len(built)} orders")
-    print(f"  Max: H({max(built)})")
+    print(f"  Max: {f'H({max(built)})' if built else 'none found'}")
     print(f"  First gaps: {[o for o in free_orders if o%4==0 and o>2][:10]}")
 
 
