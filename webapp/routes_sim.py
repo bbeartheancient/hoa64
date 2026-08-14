@@ -24,6 +24,7 @@ frames carry `E_goal` / `goal_agree`.
 from __future__ import annotations
 
 import base64
+import math
 import time
 from typing import Any
 
@@ -32,7 +33,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from .. import micromag
-from ..hadamard import sylvester
+from ..hadamard import perturb, random_seed, sylvester
 from ._png import heatmap_png, matrix_png
 from .jobs import JOBS, Job, report
 from .routes_search import (
@@ -147,32 +148,71 @@ def _run_sim(job: Job):
     rng = np.random.default_rng(p.get("seed"))
     start = _start_matrix(job)
     goal = _goal_matrix(job)
-    H, info = micromag.micromag_sa(
-        order,
-        T_start=p.get("T_start", 10.0),
-        T_end=p.get("T_end", 0.01),
-        cooling=p.get("cooling", 0.999),
-        lam_ex=p.get("lam_ex", 0.0),
-        lam_ani=p.get("lam_ani", 0.0),
-        n_swap=int(p.get("n_swap", 3)),
-        max_steps=int(p.get("max_steps", 10**9)),
-        rng=rng,
-        start=start,
-        goal=goal,
-        lam_goal=float(p.get("lam_goal", 0.5)),
-        callback=_sim_reporter(
-            job,
+
+    # A single anneal freezes after ln(T_end/T_start)/ln(cooling) steps
+    # (~7k with the defaults — a fraction of a second), long before
+    # `budget_s` matters.  Run it as a reheat chain: when a segment
+    # freezes without finding Hadamard, perturb the best-so-far matrix
+    # and anneal again until the budget stop fires or Hadamard is found.
+    field_every = int(p.get("field_every_steps", 2500))
+    lam_ex0 = float(p.get("lam_ex", 0.0))
+    lam_ani0 = float(p.get("lam_ani", 0.0))
+    stop = _BudgetStop(job)
+
+    best_H: np.ndarray | None = None
+    best_E = math.inf
+    agg = {"steps": 0, "accepts": 0, "segments": 0}
+    step_off = 0
+
+    cur = start
+    while not stop.is_set():
+        base_cb = _sim_reporter(job, order, field_every, lam_ex0, lam_ani0)
+
+        def cb(stats: dict, _off=step_off, _base=base_cb) -> None:
+            stats = dict(stats)
+            stats["step"] = stats.get("step", 0) + _off
+            _base(stats)
+
+        H, info = micromag.micromag_sa(
             order,
-            int(p.get("field_every_steps", 2500)),
-            float(p.get("lam_ex", 0.0)),
-            float(p.get("lam_ani", 0.0)),
-        ),
-        stop_flag=_BudgetStop(job),
-        live_params=live,
-    )
-    return _package_result(
-        job, H, {"best_E": info.get("best_E"), "info": info}, "micromag_sim"
-    )
+            T_start=p.get("T_start", 10.0),
+            T_end=p.get("T_end", 0.01),
+            cooling=p.get("cooling", 0.999),
+            lam_ex=lam_ex0,
+            lam_ani=lam_ani0,
+            n_swap=int(p.get("n_swap", 3)),
+            max_steps=int(p.get("max_steps", 10**9)),
+            rng=rng,
+            start=cur,
+            goal=goal,
+            lam_goal=float(p.get("lam_goal", 0.5)),
+            callback=cb,
+            stop_flag=stop,
+            live_params=live,
+        )
+        step_off += info["steps"]
+        agg["steps"] += info["steps"]
+        agg["accepts"] += info["accepts"]
+        agg["segments"] += 1
+        if info["best_E"] < best_E:
+            best_H, best_E = H, info["best_E"]
+        if info["hadamard"] or stop.is_set():
+            break
+        report(job, engine="micromag_sim", step=step_off,
+               reheat=agg["segments"], best_E=best_E)
+        cur = perturb(best_H, rng=rng, frac=0.05)
+
+    if best_H is None:  # cancelled before the first segment reported
+        best_H = random_seed(order, rng).astype(np.int8)
+        best_E = math.inf
+    info_out = {**agg, "best_E": best_E,
+                "hadamard": bool(best_E < 1e-6)}
+    if goal is not None and math.isfinite(best_E):
+        G = np.asarray(goal, dtype=np.int8).astype(np.int64)
+        corr = int((best_H.astype(np.int64) * G).sum())
+        n = int(best_H.shape[0])
+        info_out["goal_agree"] = (n * n + abs(corr)) / (2.0 * n * n)
+    return _package_result(job, best_H, info_out, "micromag_sim")
 
 
 class SimReq(BaseModel):
