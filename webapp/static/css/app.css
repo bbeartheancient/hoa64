@@ -288,6 +288,10 @@ canvas.sim-canvas {
   background: var(--bg);
   border: 1px solid var(--panel-line);
 }
+/* antenna tab: cap viz display size so outputs stay in-frame */
+.ant-cap canvas.sim-canvas { width: 256px; max-width: 100%; height: auto; }
+.ant-cap canvas.smith-canvas { width: 384px; }
+.ant-cap canvas.chart { width: 520px; max-width: 100%; }
 .sim-fx {
   position: absolute;
   inset: 22px 0 auto 0; /* below the label */

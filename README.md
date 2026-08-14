@@ -53,6 +53,15 @@ python3 -m hoa64.cli webapp
 | `terrain.py` | Hadamard‑layered Perlin fBm terrain generator |
 | `orbitals.py` | Hydrogenic real‑orbital \|ψ\|² sampler (SN3D convention) |
 | `hadamard_space.py` | ℍ³ transmute: row‑simplex PCA → Poincaré ball |
+| `em_physics.py` | Antenna physics core: lossy‑dielectric propagation, Friis, textbook antenna builders, Stokes polarization *(alpha)* |
+| `antenna_design.py` | Optimal‑construction recommender (band + site conditions) *(alpha)* |
+| `parts_db.py` | Curated off‑the‑shelf antenna parts DB + matcher *(alpha — DB needs expansion)* |
+| `fdtd.py` | 3‑D Yee FDTD Maxwell solver (air/water, polarization) *(alpha)* |
+| `antenna_evo.py` | Thin‑wire MoM evaluator + Hadamard‑seeded topology SA *(alpha)* |
+| `kicad_gen.py` | Procedural KiCad 7 footprints/boards for PCB antennas *(alpha)* |
+| `site_survey.py` | SRTM virtual site survey: terrain profiles, Fresnel/Deygout, link closure *(alpha)* |
+| `noise_data.py` | NOISEX‑92 noise database access + log‑mel DSP *(alpha)* |
+| `dit_noise.py` | DiT‑backbone noise classifier (adaLN‑Zero, lazy torch) *(alpha)* |
 | `webapp/` | FastAPI + vanilla‑JS web GUI (see Webapp below) |
 | `rh.py` | RH |Δₙ| bound checker |
 
@@ -113,6 +122,22 @@ Tabs:
 - **Terrain** — Hadamard‑layered fBm heightfield with per‑octave mute/solo
 - **Orbitals** — hydrogenic |ψ|² point cloud (3D / XZ splat / both)
 - **Library** — construction‑DAG classification and achieved‑vs‑bound chart
+- **Antenna** *(ALPHA — needs extensive field testing)* — physics‑based
+  antenna lab: DESIGN ranks optimal
+  constructions by band + site conditions (exact antenna theory — dipole,
+  patch, helix, yagi… with equation traces), PARTS matches a curated
+  off‑the‑shelf parts DB (everythingRF deep links), FIELDS runs a 3‑D
+  FDTD Maxwell solver (air/water/interface, live |E| heatmaps +
+  polarization), EVOLVE anneals Hadamard‑seeded wire topologies scored by
+  a real thin‑wire Method‑of‑Moments solver, SMITH sweeps Z_in(f) on an
+  interactive Γ‑plane chart, SURVEY runs a virtual site survey over open
+  SRTM terrain tiles (Fresnel clearance, Deygout diffraction, link
+  closure), and PCB types export procedural KiCad files
+- **Noise** *(ALPHA — window‑level split over 15 long recordings; needs a
+  larger database before real‑world generalization claims)* — DiT‑backbone
+  noise classifier: train on the NOISEX‑92
+  database (live loss/accuracy chart), then classify WAV files or live
+  mic captures with a log‑mel spectrogram + class‑probability bars
 
 Seven retro‑monitor themes (MONO, P1, AMB, PLS, DMG, CGB, VGA — VGA with
 four subthemes), a settings panel with per‑display controls (brightness,

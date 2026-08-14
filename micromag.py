@@ -14,24 +14,22 @@ from hoa64.hadamard import verify, normalize, random_seed
 
 def total_energy(H, lam_ex=0.0, lam_dem=1.0, lam_ani=0.0):
     """Micromagnetic energy E = lam_ex*E_exch + lam_dem*E_dem + lam_ani*E_anis."""
-    G = H.astype(np.float64) @ H.astype(np.float64).T
+    Hf = H.astype(np.float64)
+    G = Hf @ Hf.T
     n = H.shape[0]
 
-    # exchange: penalize adjacent sign changes within each row
-    E_exch = 0.0
-    for i in range(n):
-        for j in range(n):
-            diff = float(H[i, j]) - float(H[i, (j + 1) % n])
-            E_exch += diff * diff / 4.0
+    # exchange: penalize adjacent sign changes within each row.
+    # diff²/4 is 1 on a broken bond, 0 otherwise — the sum is exact in f64.
+    diff = Hf - np.roll(Hf, -1, axis=1)
+    E_exch = float(np.sum(diff * diff)) / 4.0
 
-    # demagnetization: penalize non‑zero row dot products
-    E_dem = 0.0
-    for i in range(n):
-        for k in range(i + 1, n):
-            E_dem += float(G[i, k] * G[i, k])
+    # demagnetization: penalize non‑zero row dot products.  G is symmetric
+    # with G[i,i] = n, so Σ_{i<k} G[i,k]² = (‖G‖²_F − n³)/2 — again exact
+    # (integer arithmetic below 2⁵³ for any n ≤ 1024).
+    E_dem = float((np.sum(G * G) - n ** 3) / 2.0)
 
     # anisotropy: penalize column imbalance
-    col_sums = H.astype(np.float64).sum(axis=0)
+    col_sums = Hf.sum(axis=0)
     E_anis = float(np.sum(col_sums * col_sums))
 
     return (lam_ex * E_exch + lam_dem * E_dem + lam_ani * E_anis,
@@ -210,7 +208,13 @@ def micromag_sa(order, T_start=10.0, T_end=0.01, cooling=0.999, max_steps=50000,
                 ok = False; break
 
         if not ok:
-            H = H_save; steps += 1; continue
+            H = H_save; steps += 1
+            # no proposal happened — T holds, but the stop flag must still
+            # be observed or a persistently-failing swap loop runs forever
+            if (stop_flag is not None and steps % 500 == 0
+                    and stop_flag.is_set()):
+                break
+            continue
 
         E_new, _, _, _ = total_energy(H, lam_ex=lam_ex, lam_ani=lam_ani)
         delta = E_new - E_cur
@@ -275,11 +279,15 @@ def micromag_sa(order, T_start=10.0, T_end=0.01, cooling=0.999, max_steps=50000,
 
 
 def micromag_ils_robust(order, T_start=20.0, n_flip=3, sa_steps=20000,
-                        restarts=5, time_budget=None, rng=None, stop_flag=None):
+                        restarts=5, time_budget=None, rng=None, stop_flag=None,
+                        progress_callback=None):
     """ILS with robust SA inner loop. Returns (H, best_f, is_hadamard).
 
     stop_flag (threading.Event, optional): checked at each restart
     boundary — break out early and return the current best when set.
+    progress_callback (optional): called once per restart with
+    {"iter", "f", "best_f", "elapsed_s"} and forwarded to the inner SA
+    (per-500-step frames) so long descents stream live progress.
     """
     rng = rng or np.random.default_rng()
     best_H = None
@@ -293,12 +301,16 @@ def micromag_ils_robust(order, T_start=20.0, n_flip=3, sa_steps=20000,
         if time_budget and time.monotonic() - t0 > time_budget:
             break
         H, st = micromag_sa(order, T_start=T_start, n_swap=n_flip,
-                            max_steps=sa_steps, rng=rng)
+                            max_steps=sa_steps, rng=rng,
+                            callback=progress_callback, stop_flag=stop_flag)
         G = H.astype(np.float64) @ H.astype(np.float64).T
         f = float(np.sum((G - order * np.eye(order)) ** 2)) / 2.0
         if best_H is None or f < best_f:
             best_H = H.copy()
             best_f = f
+        if progress_callback is not None:
+            progress_callback({"iter": it, "f": f, "best_f": best_f,
+                               "elapsed_s": time.monotonic() - t0})
         it += 1
         # Increase temperature for next restart if stuck
         T_start = min(50.0, T_start * 1.5)

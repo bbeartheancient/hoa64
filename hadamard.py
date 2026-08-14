@@ -538,11 +538,19 @@ def ils_search(
                 f"bound_log10={st['det_bound_log10']:.3f}"
             )
 
+        def _stream(st):
+            # inner-descent frames: keep the console log and stream live
+            # stats to iter_callback so long flips don't sit silent
+            if print_progress:
+                _cb(st)
+            if iter_callback is not None:
+                iter_callback(st)
+
         H, st = local_search(
             H0,
             max_flips=inner_flips,
-            report_every=max(1, inner_flips // 10),
-            callback=_cb if print_progress else None,
+            report_every=max(500, inner_flips // (50 if iter_callback is not None else 10)),
+            callback=_stream if (print_progress or iter_callback is not None) else None,
             stop_flag=stop_flag,
         )
         if print_progress:
@@ -554,6 +562,7 @@ def ils_search(
             iter_callback(
                 {
                     "iter": it,
+                    "f": st["f"],
                     "best_f": bestf,
                     "det_log10": det_log10(best),
                     "is_hadamard": bool(bestf == 0),

@@ -15,10 +15,14 @@ all that endpoint needs.  Progress streams over the existing
 cooling/lam_ex/lam_ani/lam_goal into `job.params["live"]`, which
 `micromag_sa` reads every 500 steps.
 
-Goal attraction: `SimReq.goal_order` (must equal `order`, and the order
-must be in the library) loads that library matrix as the anneal's target
-— `micromag_sa` adds `lam_goal` per entry disagreeing with ±goal and the
-frames carry `E_goal` / `goal_agree`.
+Goal attraction: `SimReq.goal_order` (must be in the library, ≥ `order`,
+and ≤ MAX_ORDER) loads that library matrix as the anneal's target —
+`micromag_sa` adds `lam_goal` per entry disagreeing with ±goal and the
+frames carry `E_goal` / `goal_agree`.  When `goal_order > order` the
+anneal runs at the goal's order and a library start is Kronecker-lifted,
+H(order) ⊗ H(goal_order/order) — evolving *from* a smaller known solution
+*toward* a larger one.  A frozen anneal is reheated (best-so-far perturbed
+5%) and run again until the `budget_s` stop fires or Hadamard is found.
 """
 
 from __future__ import annotations
@@ -50,8 +54,14 @@ FIELD_MAX = 512  # site-energy/gradient heatmaps only up to this order
 router = APIRouter(prefix="/api")
 
 
-def _start_matrix(job: Job) -> np.ndarray | None:
-    """Resolve the optional start matrix; raises HTTPException(400)."""
+def _start_matrix(job: Job, sim_order: int) -> np.ndarray | None:
+    """Resolve the optional start matrix; raises HTTPException(400).
+
+    When a larger library goal is active (`sim_order > order`) a sylvester
+    or library start is Kronecker-lifted, H(order) ⊗ H(sim_order/order),
+    so the anneal begins from the known solution embedded at the goal's
+    order — the quotient order must be in the library.
+    """
     p = job.params
     order = p["order"]
     method = p.get("start", "random")
@@ -61,17 +71,29 @@ def _start_matrix(job: Job) -> np.ndarray | None:
         H = sylvester(order)
         if H is None:
             raise HTTPException(
-                status_code=400, detail=f"sylvester needs a power-of-2 order, got {order}"
+                status_code=400,
+                detail=f"sylvester needs a power-of-2 order, got {order}",
             )
-        return H
-    if method == "library":
+    elif method == "library":
         path = LIB_DIR / f"hadamard_{order}.csv"
         if not path.is_file():
             raise HTTPException(
                 status_code=400, detail=f"order {order} not in library ({path})"
             )
-        return np.loadtxt(path, delimiter=",", dtype=np.int8)
-    raise HTTPException(status_code=400, detail=f"unknown start method {method!r}")
+        H = np.loadtxt(path, delimiter=",", dtype=np.int8)
+    else:
+        raise HTTPException(status_code=400, detail=f"unknown start method {method!r}")
+    if sim_order > order:
+        q = sim_order // order
+        lift_path = LIB_DIR / f"hadamard_{q}.csv"
+        if not lift_path.is_file():
+            raise HTTPException(
+                status_code=400,
+                detail=f"cannot lift start {order} → {sim_order}: "
+                       f"quotient order {q} not in library",
+            )
+        H = np.kron(H, np.loadtxt(lift_path, delimiter=",", dtype=np.int8))
+    return np.asarray(H, dtype=np.int8)
 
 
 def _goal_matrix(job: Job) -> np.ndarray | None:
@@ -144,9 +166,10 @@ def _sim_reporter(job: Job, order: int, field_every: int,
 def _run_sim(job: Job):
     p = job.params
     order = p["order"]
+    sim_order = int(p.get("goal_order") or order)  # anneal at the goal's order
     live = p.setdefault("live", {})
     rng = np.random.default_rng(p.get("seed"))
-    start = _start_matrix(job)
+    start = _start_matrix(job, sim_order)
     goal = _goal_matrix(job)
 
     # A single anneal freezes after ln(T_end/T_start)/ln(cooling) steps
@@ -166,7 +189,7 @@ def _run_sim(job: Job):
 
     cur = start
     while not stop.is_set():
-        base_cb = _sim_reporter(job, order, field_every, lam_ex0, lam_ani0)
+        base_cb = _sim_reporter(job, sim_order, field_every, lam_ex0, lam_ani0)
 
         def cb(stats: dict, _off=step_off, _base=base_cb) -> None:
             stats = dict(stats)
@@ -174,7 +197,7 @@ def _run_sim(job: Job):
             _base(stats)
 
         H, info = micromag.micromag_sa(
-            order,
+            sim_order,
             T_start=p.get("T_start", 10.0),
             T_end=p.get("T_end", 0.01),
             cooling=p.get("cooling", 0.999),
@@ -203,7 +226,7 @@ def _run_sim(job: Job):
         cur = perturb(best_H, rng=rng, frac=0.05)
 
     if best_H is None:  # cancelled before the first segment reported
-        best_H = random_seed(order, rng).astype(np.int8)
+        best_H = random_seed(sim_order, rng).astype(np.int8)
         best_E = math.inf
     info_out = {**agg, "best_E": best_E,
                 "hadamard": bool(best_E < 1e-6)}
@@ -223,7 +246,7 @@ class SimReq(BaseModel):
     lam_ex: float = 0.0
     lam_ani: float = 0.0
     n_swap: int = 3
-    budget_s: float = 30.0
+    budget_s: float = 300.0
     seed: int | None = None
     field_every_steps: int = 2500
     start: str = "random"
@@ -248,21 +271,44 @@ def sim_start(req: SimReq) -> dict:
             status_code=400, detail=f"order {req.order} not in library"
         )
     if req.goal_order is not None:
-        if req.goal_order != req.order:
-            raise HTTPException(
-                status_code=400,
-                detail=f"goal_order {req.goal_order} must equal order {req.order}",
-            )
-        if req.start == "library":
-            raise HTTPException(
-                status_code=400,
-                detail="start=library with a goal is degenerate "
-                       "(the start already is the goal)",
-            )
         if not (LIB_DIR / f"hadamard_{req.goal_order}.csv").is_file():
             raise HTTPException(
                 status_code=400, detail=f"goal order {req.goal_order} not in library"
             )
+        if req.goal_order > MAX_ORDER:
+            raise HTTPException(
+                status_code=400, detail=f"goal order {req.goal_order} > {MAX_ORDER}"
+            )
+        if req.goal_order < req.order:
+            raise HTTPException(
+                status_code=400,
+                detail=f"goal_order {req.goal_order} < order {req.order}",
+            )
+        if req.goal_order == req.order and req.start == "library":
+            raise HTTPException(
+                status_code=400,
+                detail="start=library with an equal-order goal is degenerate "
+                       "(the start already is the goal)",
+            )
+        if req.goal_order > req.order:
+            # the sim anneals at the goal's order; a sylvester/library
+            # start is Kronecker-lifted H(order) ⊗ H(goal_order/order),
+            # which needs the quotient order in the library
+            if req.goal_order % req.order != 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"goal_order {req.goal_order} is not a multiple "
+                           f"of order {req.order}",
+                )
+            if req.start in ("sylvester", "library") and not (
+                LIB_DIR / f"hadamard_{req.goal_order // req.order}.csv"
+            ).is_file():
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"cannot lift start {req.order} → {req.goal_order}: "
+                           f"quotient order {req.goal_order // req.order} "
+                           "not in library",
+                )
     params = {
         "order": req.order,
         "T_start": req.T_start,

@@ -88,6 +88,7 @@ def _sa_reporter(job: Job, order: int):
     def cb(stats: dict) -> None:
         stats = dict(stats)
         H = stats.pop("H", None)
+        stats.pop("elapsed_s", None)  # ILS iter frames carry their own; keep ours
         report(job, engine=engine, elapsed_s=round(time.monotonic() - t0, 3), **stats)
         now = time.monotonic()
         if (
@@ -158,7 +159,8 @@ def _run_micromag(job: Job):
         )
         return H, {"best_E": info.get("best_E"), "info": info}
     H, best_f, ok = micromag.micromag_ils_robust(
-        order, time_budget=p["budget_s"], stop_flag=stop, rng=rng
+        order, time_budget=p["budget_s"], stop_flag=stop, rng=rng,
+        progress_callback=_sa_reporter(job, order),
     )
     return H, {"best_f": best_f, "is_hadamard": bool(ok)}
 
@@ -183,7 +185,8 @@ def _run_tile(job: Job):
         )
         return H, {"best_E": info.get("best_E"), "info": info}
     H, best_f, ok = tile_search.tile_ils(
-        order, time_budget=p["budget_s"], stop_flag=stop, rng=rng
+        order, time_budget=p["budget_s"], stop_flag=stop, rng=rng,
+        progress_callback=_sa_reporter(job, order),
     )
     return H, {"best_f": best_f, "is_hadamard": bool(ok)}
 
@@ -205,7 +208,8 @@ def _run_quad(job: Job, search, ils, to_hadamard):
         )
         H, method = to_hadamard(k, a, b, c, d)
         return H, {"best_f": st.get("f"), "method": method}
-    H, method, best_f, ok = ils(k, time_budget=p["budget_s"], stop_flag=stop, rng=rng)
+    H, method, best_f, ok = ils(k, time_budget=p["budget_s"], stop_flag=stop, rng=rng,
+                                progress_callback=_sa_reporter(job, order))
     return H, {"best_f": best_f, "method": method, "is_hadamard": bool(ok)}
 
 
@@ -244,7 +248,8 @@ def _run_circulant(job: Job):
         H = cs.circulant_matrix(np.round(best_a).astype(np.int8))
         return H, {"best_f": best_f}
     H, best_f, ok = cs.search_ils(
-        order, time_budget=p["budget_s"], stop_flag=stop, rng=rng
+        order, time_budget=p["budget_s"], stop_flag=stop, rng=rng,
+        progress_callback=_sa_reporter(job, order),
     )
     return H, {"best_f": best_f, "is_hadamard": bool(ok)}
 

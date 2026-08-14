@@ -351,12 +351,14 @@ async function doStart() {
     start: document.getElementById("sim-start").value,
   };
   if (seedRaw !== "") body.seed = parseInt(seedRaw, 10);
-  if (document.getElementById("sim-goal").checked) {
-    if (body.start === "library") {
-      msg("goal + library start is degenerate (the start already is the goal)", "error");
+  const goalSel = document.getElementById("sim-goal-order").value;
+  if (goalSel !== "") {
+    const g = parseInt(goalSel, 10);
+    if (g === body.order && body.start === "library") {
+      msg("goal + library start at the same order is degenerate (the start already is the goal)", "error");
       return;
     }
-    body.goal_order = body.order;
+    body.goal_order = g;
     body.lam_goal = numVal("sim-lam-goal", 0.5);
   }
 
@@ -446,14 +448,17 @@ export function init(container) {
     el("div", { class: "row" }, el("label", {}, "lam_ex"), el("input", { id: "sim-lam-ex", type: "number", value: "0", step: "0.1" })),
     el("div", { class: "row" }, el("label", {}, "lam_ani"), el("input", { id: "sim-lam-ani", type: "number", value: "0", step: "0.1" })),
     el("div", { class: "row" }, el("label", {}, "n_swap"), el("input", { id: "sim-nswap", type: "number", value: "3", min: "1" })),
-    el("div", { class: "row" }, el("label", {}, "budget s"), el("input", { id: "sim-budget", type: "number", value: "30", min: "1" })),
+    el("div", { class: "row" }, el("label", {}, "budget s"), el("input", { id: "sim-budget", type: "number", value: "300", min: "1" })),
     el("div", { class: "row" }, el("label", {}, "field every"), el("input", { id: "sim-field-every", type: "number", value: "2500", min: "500", step: "500" })),
     el("div", { class: "row" }, el("label", {}, "seed"), el("input", { id: "sim-seed", type: "number", placeholder: "(random)" })),
     el(
       "div",
       { class: "row" },
-      el("label", {}, "goal"),
-      el("input", { id: "sim-goal", type: "checkbox" }),
+      el("label", {}, "goal order"),
+      // library orders from /api/orders; a goal ABOVE the start order
+      // Kronecker-lifts a library start (H(n) ⊗ H(goal/n)) and anneals
+      // at the goal's order
+      el("select", { id: "sim-goal-order" }, el("option", { value: "" }, "none")),
       el("span", { class: "dim" }, "[EVOLVE TO LIBRARY GOAL]")
     ),
     el("div", { class: "row" }, el("label", {}, "lam_goal"), el("input", { id: "sim-lam-goal", type: "number", value: "0.5", step: "0.1", min: "0" })),
@@ -574,6 +579,17 @@ export function init(container) {
   document.getElementById("sim-launch").addEventListener("click", doStart);
   cancelBtn.addEventListener("click", doCancel);
   exportBtn.addEventListener("click", doExport);
+
+  // fill the goal-order dropdown with the library orders
+  fetch("/api/orders?max=4000")
+    .then((r) => (r.ok ? r.json() : null))
+    .then((d) => {
+      if (!d || !d.known) return;
+      const sel = document.getElementById("sim-goal-order");
+      if (!sel) return;
+      for (const n of d.known) sel.append(el("option", { value: String(n) }, String(n)));
+    })
+    .catch(() => {});
 }
 
 export function deactivate() {

@@ -114,6 +114,21 @@ def selftest() -> int:
     expect(d["status"] == "done", f"micromag job status {d['status']}")
     print(f"PASS search micromag sa(4) — {len(progress)} progress frames")
 
+    # ILS-mode engines must stream per-iteration frames ({"iter","f","best_f"})
+    for eng, order in (("micromag", 4), ("tile", 4), ("williamson", 8),
+                       ("gs", 8), ("circulant", 4)):
+        r = client.post("/api/search", json={"engine": eng, "order": order, "budget_s": 3})
+        expect(r.status_code == 200, f"POST /api/search {eng} ils")
+        jid = r.json()["job_id"]
+        d = wait_terminal(jid, 20.0)
+        job = JOBS.get(jid)
+        it_frames = [m for m in job.history
+                     if m["type"] == "progress" and "iter" in m]
+        expect(len(it_frames) >= 1, f"{eng} ils emitted no iteration frames")
+        expect(all("best_f" in m for m in it_frames),
+               f"{eng} iter frames missing best_f")
+        print(f"PASS search {eng} ils({order}) — {len(it_frames)} iteration frames")
+
     r = client.post(
         "/api/search", json={"engine": "tile", "order": 128, "mode": "sa", "budget_s": 60}
     )
@@ -225,14 +240,47 @@ def selftest() -> int:
 
     r = client.post(
         "/api/sim/micromag",
-        json={"order": 8, "budget_s": 2, "start": "sylvester", "goal_order": 16},
+        json={"order": 8, "budget_s": 2, "start": "sylvester", "goal_order": 12},
     )
-    expect(r.status_code == 400, "goal_order != order not rejected")
+    expect(r.status_code == 400, "non-multiple goal_order not rejected")
     r = client.post(
         "/api/sim/micromag",
         json={"order": 8, "budget_s": 2, "start": "library", "goal_order": 8},
     )
-    expect(r.status_code == 400, "start=library + goal not rejected")
+    expect(r.status_code == 400, "start=library + equal-order goal not rejected")
+
+    # goal ABOVE the start order: library H(8) Kronecker-lifted to order 16,
+    # annealed toward library H(16) — the lift is already Hadamard
+    r = client.post(
+        "/api/sim/micromag",
+        json={"order": 8, "budget_s": 3, "start": "library", "goal_order": 16,
+              "lam_goal": 1.0, "seed": 9},
+    )
+    expect(r.status_code == 200 and "job_id" in r.json(), "POST sim lifted-goal")
+    jid = r.json()["job_id"]
+    d = wait_terminal(jid, 20.0)
+    expect(d["status"] == "done", f"lifted-goal sim job status {d['status']}")
+    expect(
+        d["result"]["ok"] and d["result"]["order"] == 16,
+        f"lifted-goal result unexpected: {d['result'].get('order')}, ok={d['result'].get('ok')}",
+    )
+    print("PASS sim micromag(8→16, library start lifted to goal order)")
+
+    # sylvester starts lift the same way — a non-power-of-2 goal (8×12=96,
+    # quotient 12 in the library) must be accepted; a quotient that is not
+    # a Hadamard order (8×3=24 → 3) must still be rejected
+    r = client.post(
+        "/api/sim/micromag",
+        json={"order": 8, "budget_s": 2, "start": "sylvester", "goal_order": 96},
+    )
+    expect(r.status_code == 200, "sylvester start + non-pow2 goal rejected")
+    client.post(f"/api/search/{r.json()['job_id']}/cancel")
+    r = client.post(
+        "/api/sim/micromag",
+        json={"order": 8, "budget_s": 2, "start": "sylvester", "goal_order": 24},
+    )
+    expect(r.status_code == 400, "goal with non-Hadamard quotient not rejected")
+    print("PASS sim lifted-goal validation (sylvester 8→96 ok, 8→24 rejected)")
 
     r = client.post(
         "/api/sim/micromag",
@@ -418,6 +466,196 @@ def selftest() -> int:
     r = client.post("/api/viz/hadamard-space", json={"order": 3})
     expect(r.status_code == 400, "order 3 should be 400")
     print("PASS viz hadamard-space rejects order 3")
+
+    # ------------------------------------------------ Antenna lab
+    r = client.post("/api/antenna/design", json={
+        "f_lo_mhz": 2400, "f_hi_mhz": 2485, "medium": "air",
+        "site": {"mounting": "pcb", "max_size_m": 0.04},
+    })
+    d = r.json()
+    expect(r.status_code == 200, "POST /api/antenna/design")
+    entries = d["entries"]
+    expect(len(entries) >= 1, "design entries empty")
+    scores = [e["score"] for e in entries]
+    expect(all(0.0 < s <= 1.0 for s in scores), "design scores outside (0,1]")
+    expect(
+        all(scores[i] >= scores[i + 1] for i in range(len(scores) - 1)),
+        "design entries not sorted by score desc",
+    )
+    top = entries[0]
+    expect(top["design"]["dimensions_m"], "top design missing dimensions_m")
+    expect(isinstance(top["explain"], str) and top["explain"], "top explain missing")
+    expect(isinstance(top["reasons"], list) and top["reasons"], "top reasons missing")
+    expect(abs(d["required_bw_frac"] - 0.0348) < 0.001, "required_bw_frac off")
+    expect(d["f_center_mhz"] == 2442.5, "f_center_mhz != 2442.5")
+    # physics pin: a 2.4 GHz half-wave dipole in air is ≈ 58 mm long
+    dip = next(e for e in entries if e["type"] == "dipole")
+    dip_dims = [float(v) for v in dip["design"]["dimensions_m"].values()]
+    expect(
+        any(0.0561 <= v <= 0.0601 for v in dip_dims),
+        f"dipole has no ≈58 mm dimension: {dip_dims}",
+    )
+    print(f"PASS antenna design ({len(entries)} entries, top={top['type']}, "
+          f"dipole dims pinned)")
+
+    r = client.post("/api/antenna/design", json={"f_lo_mhz": 2485, "f_hi_mhz": 2400})
+    expect(r.status_code == 400, "design f_lo >= f_hi should be 400")
+    print("PASS antenna design rejects f_lo >= f_hi")
+
+    r = client.post("/api/antenna/parts", json={
+        "f_lo_mhz": 2400, "f_hi_mhz": 2485, "gain_dbi_min": 0})
+    d = r.json()
+    expect(r.status_code == 200, "POST /api/antenna/parts")
+    matches = d["matches"]
+    expect(len(matches) >= 4, "parts matches < 4")
+    expect(
+        all(matches[i]["score"] >= matches[i + 1]["score"]
+            for i in range(len(matches) - 1)),
+        "parts matches not sorted by score desc",
+    )
+    expect(
+        all(all(k in m for k in ("part", "mfr", "erf_url")) for m in matches),
+        "parts match missing part/mfr/erf_url",
+    )
+    expect(
+        all(m["freq_lo_mhz"] <= 2400 and m["freq_hi_mhz"] >= 2485 for m in matches),
+        "parts match does not cover the band",
+    )
+    print(f"PASS antenna parts ({len(matches)} matches, all cover 2400–2485)")
+
+    r = client.post("/api/antenna/parts", json={"f_lo_mhz": 38000, "f_hi_mhz": 39000})
+    d = r.json()
+    expect(r.status_code == 200 and d["matches"] == [], "38–39 GHz should match nothing")
+    print("PASS antenna parts empty band (38–39 GHz)")
+
+    r = client.post("/api/antenna/kicad", json={"design_type": "patch", "f_mhz": 2450})
+    d = r.json()
+    expect(r.status_code == 200 and d.get("token"), "POST /api/antenna/kicad")
+    files = d["files"]
+    expect(len(files) >= 2, "kicad export < 2 files")
+    mod = [f for f in files if f.endswith(".kicad_mod")]
+    pcb = [f for f in files if f.endswith(".kicad_pcb")]
+    expect(mod and pcb, "kicad export missing .kicad_mod/.kicad_pcb")
+    for name, magic in ((mod[0], "(footprint"), (pcb[0], "(kicad_pcb")):
+        rg = client.get(f"/api/antenna/kicad/{d['token']}/{name}")
+        expect(rg.status_code == 200 and rg.text.startswith(magic),
+               f"kicad file {name} bad")
+        rg2 = client.get(f"/api/antenna/kicad/{d['token']}/{name}")
+        expect(rg2.status_code == 404, f"kicad file {name} not one-shot")
+    print(f"PASS antenna kicad patch ({len(files)} files, one-shot OK)")
+
+    r = client.post("/api/antenna/kicad", json={"design_type": "bogus", "f_mhz": 2450})
+    expect(r.status_code == 400, "kicad bogus design_type should be 400")
+    print("PASS antenna kicad rejects bogus design_type")
+
+    # fresh export kept unconsumed for the frontend-path pinning below
+    rp = client.post("/api/antenna/kicad", json={"design_type": "patch", "f_mhz": 2450})
+    kicad_pin_token = rp.json()["token"]
+    kicad_pin_name = rp.json()["files"][0]
+
+    r = client.post("/api/antenna/fields", json={
+        "f_mhz": 150, "medium": "water", "interface": False,
+        "n": 24, "max_steps": 30, "frame_every": 10, "budget_s": 120,
+    })
+    expect(r.status_code == 200 and "job_id" in r.json(), "POST /api/antenna/fields")
+    jid = r.json()["job_id"]
+    d = wait_terminal(jid, 60.0)
+    expect(d["status"] == "done", f"fields job status {d['status']}")
+    job = JOBS.get(jid)
+    fframes = [m for m in job.history
+               if all(k in m for k in ("e_xy_png_b64", "e_xz_png_b64", "ar_png_b64"))]
+    expect(len(fframes) >= 1, "fields emitted no e_xy/e_xz/ar frame")
+    for key in ("e_xy_png_b64", "e_xz_png_b64", "ar_png_b64"):
+        expect(base64.b64decode(fframes[0][key])[:8] == PNG_MAGIC,
+               f"fields {key} bad magic")
+    res = d["result"]
+    expect(res["alpha_theory"] > 0.0, "fields alpha_theory <= 0 (water)")
+    expect(res["dx_m"] > 0.0, "fields dx_m <= 0")
+    print(f"PASS antenna fields (water 150 MHz, {len(fframes)} heatmap frames, "
+          f"α={res['alpha_theory']:.3g} Np/m)")
+
+    r = client.post("/api/antenna/evolve", json={
+        "f_mhz": 2450, "medium": "air", "hadamard_order": 64,
+        "max_steps": 150, "budget_s": 120,
+    })
+    expect(r.status_code == 200 and "job_id" in r.json(), "POST /api/antenna/evolve")
+    jid = r.json()["job_id"]
+    d = wait_terminal(jid, 60.0)
+    expect(d["status"] == "done", f"evolve job status {d['status']}")
+    job = JOBS.get(jid)
+    pframes = [m for m in job.history if "points" in m]
+    expect(len(pframes) >= 1, "evolve emitted no points frame")
+    expect(
+        any(len(m["points"]) >= 1 and len(m["points"][0]) == 3 for m in pframes),
+        "evolve points not [x,y,z] triples",
+    )
+    expect(
+        any("E" in m and "best_E" in m for m in pframes),
+        "evolve frames missing E/best_E",
+    )
+    pat = [m for m in job.history if "pattern_png_b64" in m]
+    expect(len(pat) >= 1, "evolve emitted no pattern_png_b64 frame")
+    expect(base64.b64decode(pat[-1]["pattern_png_b64"])[:8] == PNG_MAGIC,
+           "evolve pattern png bad magic")
+    res = d["result"]
+    expect(np.isfinite(res["gain_dbi"]), "evolve gain_dbi not finite")
+    expect("re" in res["z_in"] and "im" in res["z_in"], "evolve z_in missing re/im")
+    print(f"PASS antenna evolve (H64 seed, gain {res['gain_dbi']:.2f} dBi)")
+
+    r = client.get("/js/tabs/antenna.js")
+    expect(r.status_code == 200 and "ant-layer-select" in r.text, "antenna.js tab")
+    expect("smith-canvas" in r.text and "drawSmith" in r.text, "antenna.js smith panel")
+    r = client.get("/")
+    expect('data-tab="antenna"' in r.text, "index antenna tab button")
+    print("PASS antenna static integrity (tab js + index button)")
+
+    r = client.post("/api/antenna/smith", json={
+        "f_lo_mhz": 950.0, "f_hi_mhz": 1050.0, "n_points": 5, "source": "dipole"})
+    expect(r.status_code == 200, f"smith dipole sweep: {r.status_code} {r.text[:200]}")
+    sw = r.json()
+    expect(len(sw["sweep"]) == 5 and sw["z0"] == 50.0, "smith sweep shape")
+    zmid = sw["sweep"][2]["z"]
+    expect(40.0 < zmid["re"] < 120.0, f"smith dipole Re(Z) off: {zmid}")
+    for p in sw["sweep"]:
+        if "gamma" in p:
+            expect(abs(p["gamma"]["re"]) <= 1.0 + 1e-6
+                   and abs(p["gamma"]["im"]) <= 1.0 + 1e-6, "gamma off chart")
+    pts = [[0, 0, 0], [0.01, 0, 0], [0.01, 0.01, 0], [0.02, 0.01, 0], [0.03, 0, 0]]
+    r = client.post("/api/antenna/smith", json={
+        "f_lo_mhz": 2400.0, "f_hi_mhz": 2500.0, "n_points": 3,
+        "source": "wire", "points": pts})
+    expect(r.status_code == 200 and all("gamma" in p for p in r.json()["sweep"]),
+           "smith wire sweep")
+    r = client.post("/api/antenna/smith", json={
+        "f_lo_mhz": 900.0, "f_hi_mhz": 1000.0, "source": "bogus"})
+    expect(r.status_code == 400, "smith rejects bogus source")
+    print(f"PASS antenna smith (dipole Z_in mid = {zmid['re']:.1f}{zmid['im']:+.1f}j Ω)")
+
+    # survey: validation paths only (tile fetch needs network)
+    r = client.post("/api/antenna/survey", json={
+        "tx": {"lat": 46.6, "lon": 8.0, "h_m": 9999},
+        "rx": {"lat": 46.62, "lon": 8.02, "h_m": 15}, "f_mhz": 2450})
+    expect(r.status_code == 400, "survey rejects h_m out of range")
+    r = client.post("/api/antenna/survey", json={
+        "tx": {"lat": 146.6, "lon": 8.0, "h_m": 15},
+        "rx": {"lat": 46.62, "lon": 8.02, "h_m": 15}, "f_mhz": 2450})
+    expect(r.status_code == 400, "survey rejects lat out of range")
+    print("PASS antenna survey validation (400s, offline)")
+
+    r = client.get("/api/noise/classes")
+    expect(r.status_code == 200, "noise classes endpoint")
+    nd = r.json()
+    expect(len(nd["classes"]) == 15 and isinstance(nd["model"]["trained"], bool),
+           "noise classes payload")
+    r = client.post("/api/noise/analyze", json={})
+    expect(r.status_code == 400, "noise analyze needs path xor live_seconds")
+    r = client.post("/api/noise/analyze", json={"path": "/nonexistent.wav"})
+    expect(r.status_code == 400, "noise analyze bad input → 400")
+    r = client.get("/js/tabs/noise.js")
+    expect(r.status_code == 200 and "NOISE LAB" in r.text, "noise.js tab")
+    r = client.get("/")
+    expect('data-tab="noise"' in r.text, "index noise tab button")
+    print(f"PASS noise lab (15 classes, model trained: {nd['model']['trained']})")
 
     # ------------------------------------------------ Phase 4.5: HUD themes
     r = client.get("/css/themes.css")
@@ -711,6 +949,18 @@ def selftest() -> int:
         ("GET", "/api/library/64", None),
         ("POST", "/api/verify", {"matrix": [[1, 1], [1, -1]]}),
         ("POST", "/api/viz/hadamard-space", {"order": 16, "mode": "rows", "kappa": 1}),
+        ("POST", "/api/antenna/design", {"f_lo_mhz": 2400, "f_hi_mhz": 2485}),
+        ("POST", "/api/antenna/parts", {"f_lo_mhz": 2400, "f_hi_mhz": 2485}),
+        ("POST", "/api/antenna/kicad", {"design_type": "patch", "f_mhz": 2450}),
+        ("POST", "/api/antenna/fields", {"f_mhz": 150, "medium": "air", "n": 16,
+                                         "max_steps": 10, "budget_s": 5}),
+        ("POST", "/api/antenna/evolve", {"f_mhz": 2450, "max_steps": 10,
+                                         "budget_s": 5}),
+        ("POST", "/api/antenna/smith", {"f_lo_mhz": 950, "f_hi_mhz": 1050,
+                                        "n_points": 3}),
+        ("GET", "/api/noise/classes", None),
+        ("POST", "/api/noise/analyze", {"path": "/nonexistent.wav"}),
+        ("GET", f"/api/antenna/kicad/{kicad_pin_token}/{kicad_pin_name}", None),
     ]
     for method, path, body in frontend_calls:
         r = client.request(method, path, json=body) if body is not None else client.request(method, path)

@@ -79,7 +79,16 @@ channel count, and FOA is a normalized H4.
   `{category, name, colors}` per file, 5-min cache), `routes_library.py`
   (Phase 5b: /api/dag
   construction-DAG classification + /api/detbounds achieved-vs-bound,
-  both cached/threaded), `static/vendor/`
+  both cached/threaded), `routes_antenna.py` (antenna lab under
+  /api/antenna: sync /design recommender + /parts matcher + /kicad
+  export [bounded one-shot-per-file token cache, contents in memory] +
+  /smith MoM Z_in(f)→Γ(f) sweep [dipole or explicit wire geometry] +
+  /survey SRTM site survey + /survey/map terrain mosaic,
+  job-based /fields FDTD lab and /evolve Hadamard-seeded topology SA —
+  same callback→report/`_BudgetStop`/`params["live"]` wiring as
+  routes_sim), `routes_noise.py` (/api/noise: /classes model status,
+  /train DiT job, /analyze WAV-path or live-mic classify → mel PNG +
+  probs), `static/vendor/`
   (pinned three.js 0.170.0 + OrbitControls, import map in index.html),
   `static/css/themes.css` + `static/js/theme.js` (Phase 4.5/6/7: seven
   runtime retro-monitor themes — mono/P1/AMB/PLS/DMG/CGB/VGA —
@@ -147,10 +156,23 @@ channel count, and FOA is a normalized H4.
   QUANTUM_FRAG takes `uDensity`/`uDensityOn` for the orbitals radial
   profile coupling). All four three.js tabs pass `themeRamp()` (never
   `THEMES[...].ramp`) to `pipeline.setTheme`),
-  `_png.py` (stdlib PNG encoder), `jobs.py` (JobManager thread pool,
+  `_png.py` (stdlib PNG encoder + 8-bit RGB/RGBA decoder with all five
+  filter types — the decoder serves the Terrarium terrain tiles), `jobs.py` (JobManager thread pool,
   bounded `job.history` replay buffer, `job.matrix` holds verified results
   off-JSON), `static/` (no-build ES-module frontend; tabs: Matrix Lab,
-  Search Studio, Micromag Sim, HOA Studio, Terrain, Orbitals, Library —
+  Search Studio, Micromag Sim, HOA Studio, Terrain, Orbitals, Library,
+  Antenna (`js/tabs/antenna.js` — `#ant-layer-select` DESIGN/PARTS/
+  FIELDS/EVOLVE/KICAD/SMITH panels; FIELDS/EVOLVE stream job frames over
+  `/ws/job/{id}`, DESIGN auto-fires the parts query and exposes one-shot
+  KiCad downloads, KICAD is a standalone export form with per-file
+  download links, SMITH renders the MoM Z_in sweep on an interactive Γ
+  plane with hover readout, SURVEY runs the SRTM virtual site survey
+  with terrain-profile + map overlays; job results keep long payloads
+  (pattern_png_b64/resonance_note/points) OUT of the DOM — whitelist
+  stat rows + [RESULT JSON] blob download; viz canvases capped via
+  `.ant-cap` in app.css), Noise (`js/tabs/noise.js` — DiT classifier
+  training with a loss/acc strip chart + WAV/live-mic analysis with mel
+  spectrogram and class-probability bars) —
   cross-tab deep links via `hoa64:open-tab`/`hoa64:payload` events in
   `main.js`; `js/viz/stripchart.js`. Single-viewport UI convention: each
   tab keeps ONE main viewport and swaps content in place — Matrix Lab's
@@ -187,7 +209,53 @@ channel count, and FOA is a normalized H4.
   replica of `basis._sn3d_one` pinned by selftest cross-check),
   `hadamard_space.py` (ℍ³ transmute: row-simplex PCA → Poincaré ball,
   orthogonal-circle geodesics, hyperboloid lattice lift; unit-ball frame
-  with curvature in the metric, κ = 0 flat display mode).
+  with curvature in the metric, κ = 0 flat display mode),
+  `em_physics.py` (antenna-design physics core: general lossy-dielectric
+  propagation `medium_params` (α/β/γ, η, skin depth) over the `MEDIA`
+  table [air/fresh water/seawater], Friis `link_budget` with medium
+  attenuation, `ANTENNA_TYPES` registry of textbook builders — dipole,
+  monopole, loop, patch, helix, yagi, slot, pifa/meander — each
+  returning dimensions/Z/gain/BW + a vectorized normalized
+  `pattern(theta, phi)`, and `stokes(ex, ey)` polarization
+  analysis; all dimensions key off the medium wavelength).
+- Antenna-lab modules (ALPHA BUILD — needs extensive field testing and a
+  larger parts database; library style with selftests, all physics-based —
+  no heuristics): `antenna_design.py` (`SiteConditions` + `recommend` —
+  ranks `ANTENNA_TYPES` by exact fit factors: fractional BW, size, link
+  budget at f_lo, medium attenuation e^(−αλ), polarization mismatch,
+  viability constraints; composite = product, `explain()` trace),
+  `parts_db.py` + `webapp/data/antenna_parts.json` (local curated
+  off-the-shelf antenna DB — everythingRF has no API and 403-blocks
+  scraping, so rows mirror their listing fields and carry `erf_url` deep
+  links; `match(spec)` freq-coverage gate + gain/size scoring),
+  `fdtd.py` (3-D Yee FDTD: lossy-dielectric Cayley updates, graded
+  sponge BC [not CPML], soft sinusoidal point source, air/water/
+  air-water-interface media, per-frame |E| mid-plane slices + Stokes
+  phasor polarization, radial α_fit validated against theory; same
+  callback/stop_flag/live_params streaming contract as `micromag_sa`),
+  `antenna_evo.py` (thin-wire Method of Moments — Pocklington EFIE,
+  pulse basis, reduced kernel, delta-gap feed; power-consistent, dipole
+  Z_in ≈ 73+j42 Ω at thin radius, resonance at 0.48 λ — plus
+  `antenna_sa`: Hadamard-row-seeded meander-walk topology annealing with
+  length-invariant corner-flip/swap moves and a multi-term
+  match/gain/compactness objective), `kicad_gen.py` (procedural KiCad 7
+  `.kicad_mod`/`.kicad_pcb` for patch/meander-IFA/loop PCB antennas from
+  `em_physics` dimensions; Wheeler/Hammerstad 50 Ω feedline synthesis,
+  6h ground margin, S-expr parser validity gate + `kicad-cli pcb
+  upgrade` check when available),
+  `site_survey.py` (virtual site survey: AWS Open Data SRTM Terrarium
+  tiles [no key, cached to ~/.cache/hoa64/terrain], great-circle path
+  profiles, 4/3-earth bulge + first-Fresnel geometry, Deygout knife-edge
+  diffraction, `em_physics.link_budget` closure → verdict),
+  `noise_data.py` (NOISEX-92 noise DB — 15 classes of .mat from
+  spib.linse.ufsc.br, cached to ~/.cache/hoa64/noisex92; HTK log-mel
+  DSP with fixed dB normalization),
+  `dit_noise.py` (ALPHA BUILD — DiT-backbone noise classifier, Peebles & Xie
+  adaLN-Zero blocks used discriminatively, lazy torch, `train_model`
+  job-friendly with callback/stop_flag, checkpoint `dit_noise.pt`;
+  window-level train/val split over 15 long recordings means val_acc≈1
+  reflects within-recording familiarity — needs a larger database and
+  unseen-source testing before generalization claims).
 - Search engines/daemons (standalone scripts, each does
   `sys.path.insert(0, parent)` then `from hoa64....` imports):
   `evolve.py` (gap-filling daemon, constructions only), `search_daemon.py`

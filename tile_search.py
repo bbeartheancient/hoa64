@@ -101,11 +101,15 @@ def tile_sa_swap(order, T_start=20.0, T_end=0.01, cooling=0.9995,
 
 
 def tile_ils(order, T_start=20.0, cooling=0.9995, sa_steps=15000,
-             restarts=5, time_budget=None, rng=None, stop_flag=None):
+             restarts=5, time_budget=None, rng=None, stop_flag=None,
+             progress_callback=None):
     """ILS with tile‑based SA inner loop.
 
     stop_flag (threading.Event, optional): checked at each restart
     boundary — break out early and return the current best when set.
+    progress_callback (optional): called once per restart with
+    {"iter", "f", "best_f", "elapsed_s"} and forwarded to the inner SA
+    (per-500-step frames) so long descents stream live progress.
     """
     rng = rng or np.random.default_rng()
     best_H = None; best_f = None; it = 0; t0 = time.monotonic()
@@ -113,11 +117,15 @@ def tile_ils(order, T_start=20.0, cooling=0.9995, sa_steps=15000,
         if stop_flag is not None and stop_flag.is_set(): break
         if time_budget and time.monotonic() - t0 > time_budget: break
         H, st = tile_sa_swap(order, T_start=T_start, cooling=cooling,
-                        max_steps=sa_steps, rng=rng)
+                        max_steps=sa_steps, rng=rng,
+                        callback=progress_callback, stop_flag=stop_flag)
         G = H.astype(np.float64) @ H.astype(np.float64).T
         f = float(np.sum((G - order * np.eye(order)) ** 2)) / 2.0
         if best_H is None or f < best_f:
             best_H = H.copy(); best_f = f
+        if progress_callback is not None:
+            progress_callback({"iter": it, "f": f, "best_f": best_f,
+                               "elapsed_s": time.monotonic() - t0})
         it += 1
         T_start = min(30.0, T_start * 1.3)
     return best_H, best_f, (best_H is not None and verify(best_H))

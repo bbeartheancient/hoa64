@@ -81,7 +81,7 @@ def psd_search(n, max_flips=100000, tol=1.0, rng=None, start_seq=None,
 
 
 def search_ils(n, inner_flips=20000, outer_iters=30, time_budget=None,
-               rng=None, frac=0.05, stop_flag=None):
+               rng=None, frac=0.05, stop_flag=None, progress_callback=None):
     rng = rng or np.random.default_rng()
     m = int(math.isqrt(n)); n_plus = (n + m) // 2
     best_a = None; best_f = None; it = 0; t0 = time.monotonic()
@@ -100,9 +100,13 @@ def search_ils(n, inner_flips=20000, outer_iters=30, time_budget=None,
             pos = rng.choice(n, size=n_plus, replace=False)
             a[pos] = 1.0
         a_res, f, flips, _ = psd_search(n, max_flips=inner_flips, tol=0.0,
-                                          start_seq=a, stop_flag=stop_flag)
+                                          start_seq=a, stop_flag=stop_flag,
+                                          callback=progress_callback)
         if best_a is None or f < best_f:
             best_a = a_res.copy(); best_f = f
+        if progress_callback is not None:
+            progress_callback({"iter": it, "f": f, "best_f": best_f,
+                               "elapsed_s": time.monotonic() - t0})
         it += 1
     if best_a is None:  # cancelled before the first descent finished
         return None, None, False

@@ -20,10 +20,12 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from .routes_antenna import router as antenna_router
 from .routes_gen import router as gen_router
 from .routes_hadamard import router as hadamard_router
 from .routes_library import router as library_router
 from .routes_hoa import router as hoa_router
+from .routes_noise import router as noise_router
 from .routes_palettes import router as palettes_router
 from .routes_search import router as search_router, ws_router as search_ws_router
 from .routes_sim import router as sim_router
@@ -46,6 +48,8 @@ def create_app() -> FastAPI:
     app.include_router(sim_router)
     app.include_router(hoa_router)
     app.include_router(palettes_router)
+    app.include_router(antenna_router)
+    app.include_router(noise_router)
     app.include_router(search_ws_router)
 
     # Any /api/* request that matched no router would otherwise fall

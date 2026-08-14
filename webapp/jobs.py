@@ -101,4 +101,4 @@ class JobManager:
             return list(reversed(self._jobs.values()))
 
 
-JOBS = JobManager()
+JOBS = JobManager(max_workers=4)

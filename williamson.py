@@ -155,12 +155,15 @@ def williamson_search(k, max_flips=50000, tol=1.0, rng=None, start=None,
 
 
 def williamson_ils(k, inner_flips=20000, outer_iters=20, time_budget=None,
-                   frac=0.05, rng=None, stop_flag=None):
+                   frac=0.05, rng=None, stop_flag=None, progress_callback=None):
     """ILS outer loop: perturb + greedy descent repeats.
 
     stop_flag (threading.Event, optional): checked at each outer-iteration
     boundary (and forwarded to the inner descent) — break out early and
     return the current best when set.
+    progress_callback (optional): called once per outer iteration with
+    {"iter", "f", "best_f", "elapsed_s"} and forwarded to the inner descent
+    (per-500-flip frames) so long descents stream live progress.
     """
     rng = rng or np.random.default_rng()
     half = k // 2 + 1
@@ -183,13 +186,15 @@ def williamson_ils(k, inner_flips=20000, outer_iters=20, time_budget=None,
         else:
             seqs = [symmetric_random(k, rng) for _ in range(4)]
         a,b,c,d,st = williamson_search(
-            k, max_flips=inner_flips, start=seqs, stop_flag=stop_flag)
+            k, max_flips=inner_flips, start=seqs, stop_flag=stop_flag,
+            callback=progress_callback)
         if best_seq is None or st["f"] < best_f:
             best_seq = (a.copy(), b.copy(), c.copy(), d.copy())
             best_f = st["f"]
+        if progress_callback is not None:
+            progress_callback({"iter": it, "f": st["f"], "best_f": best_f,
+                               "elapsed_s": time.monotonic() - t0})
         it += 1
-        if it % 5 == 0:
-            pass  # progress slot
     if best_seq is None:  # cancelled before the first descent finished
         return None, "cancelled", None, False
     a,b,c,d = best_seq
@@ -263,12 +268,15 @@ def gs_circulant_search(k: int, max_flips=50000, tol=1.0, rng=None, start=None,
 
 
 def gs_circulant_ils(k, inner_flips=20000, outer_iters=20, time_budget=None,
-                     frac=0.05, rng=None, stop_flag=None):
+                     frac=0.05, rng=None, stop_flag=None, progress_callback=None):
     """ILS outer loop for general circulant GS search.
 
     stop_flag (threading.Event, optional): checked at each outer-iteration
     boundary (and forwarded to the inner descent) — break out early and
     return the current best when set.
+    progress_callback (optional): called once per outer iteration with
+    {"iter", "f", "best_f", "elapsed_s"} and forwarded to the inner descent
+    (per-500-flip frames) so long descents stream live progress.
     """
     rng = rng or np.random.default_rng()
     best_seq = None; best_f = None; it = 0; t0 = time.monotonic()
@@ -285,10 +293,14 @@ def gs_circulant_ils(k, inner_flips=20000, outer_iters=20, time_budget=None,
         else:
             seqs = [circulant_random(k, rng) for _ in range(4)]
         a,b,c,d,st = gs_circulant_search(k, max_flips=inner_flips, tol=0.0, start=seqs,
-                                         stop_flag=stop_flag)
+                                         stop_flag=stop_flag,
+                                         callback=progress_callback)
         if best_seq is None or st["f"] < best_f:
             best_seq = (a.copy(), b.copy(), c.copy(), d.copy())
             best_f = st["f"]
+        if progress_callback is not None:
+            progress_callback({"iter": it, "f": st["f"], "best_f": best_f,
+                               "elapsed_s": time.monotonic() - t0})
         it += 1
     if best_seq is None:  # cancelled before the first descent finished
         return None, "cancelled", None, False
