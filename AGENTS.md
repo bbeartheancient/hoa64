@@ -355,7 +355,13 @@ small `if __name__ == "__main__":` demo/self-check in the prevailing style.
 ## Deployment & operations
 
 - Nothing is deployed as a package. "Deployment" is running `server.py`
-  (`hoa64 serve`) or the daemons locally on this machine.
+  (`hoa64 serve`) or the daemons locally on this machine; additionally a
+  LAN mirror runs on `192.168.1.107` ("generator"): plain rsync copy at
+  `~/hoa64` (tracked files via `git ls-files`), venv `~/hoa64-venv`
+  (numpy, torch+xpu, fastapi/uvicorn), serving
+  `hoa64 webapp --host 192.168.1.107 --port 8770` with a ufw rule
+  allowing 8770/tcp from 192.168.1.0/24. SSH deploy key:
+  `~/.ssh/hoa64_deploy` (user bbear).
 - Daemons write into `~/open_hadamard/` (outside the repo); `evolve.py`
   auto-cascades Kronecker multiples whenever a new order is filled.
 - Git: single branch `master`, remote `github.com/bbeartheancient/hoa64`.
