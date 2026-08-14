@@ -92,8 +92,16 @@ def gs_assemble(a, b, c, d):
     return np.concatenate([top, r2, r3, r4], axis=0).astype(np.int8)
 
 
-def williamson_search(k, max_flips=50000, tol=1.0, rng=None, start=None):
-    """Single-flip greedy PSD descent. Returns (a,b,c,d,stats)."""
+def williamson_search(k, max_flips=50000, tol=1.0, rng=None, start=None,
+                      callback=None, stop_flag=None, report_every=500):
+    """Single-flip greedy PSD descent. Returns (a,b,c,d,stats).
+
+    Optional streaming hooks (zero behavior change when omitted):
+    callback(dict) is called every report_every flips with
+    {"step", "f", "best_f", "H"} (H = current best matrix, for live
+    previews; never serialized); stop_flag (threading.Event) breaks the
+    descent early when set, returning the current best.
+    """
     rng = rng or np.random.default_rng()
     target = 4.0 * float(k)
     if start is None:
@@ -135,6 +143,11 @@ def williamson_search(k, max_flips=50000, tol=1.0, rng=None, start=None):
         if fn < best_f:
             best_f = fn
             best = [s.copy() for s in seqs]
+        if callback is not None and flips % report_every == 0:
+            callback({"step": flips, "f": f_cur, "best_f": best_f,
+                      "H": williamson_assemble(*best)})
+        if stop_flag is not None and stop_flag.is_set():
+            break
 
     return (*best, dict(
         f=best_f, flips=flips, is_williamson=(best_f < 1e-6),
@@ -142,8 +155,13 @@ def williamson_search(k, max_flips=50000, tol=1.0, rng=None, start=None):
 
 
 def williamson_ils(k, inner_flips=20000, outer_iters=20, time_budget=None,
-                   frac=0.05, rng=None):
-    """ILS outer loop: perturb + greedy descent repeats."""
+                   frac=0.05, rng=None, stop_flag=None):
+    """ILS outer loop: perturb + greedy descent repeats.
+
+    stop_flag (threading.Event, optional): checked at each outer-iteration
+    boundary (and forwarded to the inner descent) — break out early and
+    return the current best when set.
+    """
     rng = rng or np.random.default_rng()
     half = k // 2 + 1
     best_seq = None
@@ -151,6 +169,8 @@ def williamson_ils(k, inner_flips=20000, outer_iters=20, time_budget=None,
     it = 0
     t0 = time.monotonic()
     while it < outer_iters:
+        if stop_flag is not None and stop_flag.is_set():
+            break
         if time_budget and time.monotonic() - t0 > time_budget:
             break
         if best_seq is not None and it > 0:
@@ -163,25 +183,34 @@ def williamson_ils(k, inner_flips=20000, outer_iters=20, time_budget=None,
         else:
             seqs = [symmetric_random(k, rng) for _ in range(4)]
         a,b,c,d,st = williamson_search(
-            k, max_flips=inner_flips, start=seqs)
+            k, max_flips=inner_flips, start=seqs, stop_flag=stop_flag)
         if best_seq is None or st["f"] < best_f:
             best_seq = (a.copy(), b.copy(), c.copy(), d.copy())
             best_f = st["f"]
         it += 1
         if it % 5 == 0:
             pass  # progress slot
+    if best_seq is None:  # cancelled before the first descent finished
+        return None, "cancelled", None, False
     a,b,c,d = best_seq
     H, method = williamson_to_hadamard(k, a, b, c, d)
     from .hadamard import verify
     return H, method, best_f, verify(H)
 
 
-def gs_circulant_search(k: int, max_flips=50000, tol=1.0, rng=None, start=None):
+def gs_circulant_search(k: int, max_flips=50000, tol=1.0, rng=None, start=None,
+                        callback=None, stop_flag=None, report_every=500):
     """Single-flip greedy PSD descent for general circulant GS sequences.
 
     No symmetry constraint — any +/-1 sequence produces a circulant matrix.
     Circulant matrices automatically commute, satisfying the GS condition.
     Returns (a,b,c,d,stats).
+
+    Optional streaming hooks (zero behavior change when omitted):
+    callback(dict) is called every report_every flips with
+    {"step", "f", "best_f", "H"} (H = current best matrix, for live
+    previews; never serialized); stop_flag (threading.Event) breaks the
+    descent early when set, returning the current best.
     """
     rng = rng or np.random.default_rng()
     target = 4.0 * float(k)
@@ -223,17 +252,28 @@ def gs_circulant_search(k: int, max_flips=50000, tol=1.0, rng=None, start=None):
         if fn < best_f:
             best_f = fn
             best = [s.copy() for s in seqs]
+        if callback is not None and flips % report_every == 0:
+            callback({"step": flips, "f": f_cur, "best_f": best_f,
+                      "H": williamson_assemble(*best)})
+        if stop_flag is not None and stop_flag.is_set():
+            break
     return (*best, dict(
         f=best_f, flips=flips, is_gs=(best_f < 1e-6),
         elapsed_s=time.monotonic() - t0))
 
 
 def gs_circulant_ils(k, inner_flips=20000, outer_iters=20, time_budget=None,
-                     frac=0.05, rng=None):
-    """ILS outer loop for general circulant GS search."""
+                     frac=0.05, rng=None, stop_flag=None):
+    """ILS outer loop for general circulant GS search.
+
+    stop_flag (threading.Event, optional): checked at each outer-iteration
+    boundary (and forwarded to the inner descent) — break out early and
+    return the current best when set.
+    """
     rng = rng or np.random.default_rng()
     best_seq = None; best_f = None; it = 0; t0 = time.monotonic()
     while it < outer_iters:
+        if stop_flag is not None and stop_flag.is_set(): break
         if time_budget and time.monotonic() - t0 > time_budget: break
         if best_seq is not None and it > 0:
             n_pert = max(1, int(frac * k * 4))
@@ -244,11 +284,14 @@ def gs_circulant_ils(k, inner_flips=20000, outer_iters=20, time_budget=None,
                 seqs[si][idx] *= -1.0
         else:
             seqs = [circulant_random(k, rng) for _ in range(4)]
-        a,b,c,d,st = gs_circulant_search(k, max_flips=inner_flips, tol=0.0, start=seqs)
+        a,b,c,d,st = gs_circulant_search(k, max_flips=inner_flips, tol=0.0, start=seqs,
+                                         stop_flag=stop_flag)
         if best_seq is None or st["f"] < best_f:
             best_seq = (a.copy(), b.copy(), c.copy(), d.copy())
             best_f = st["f"]
         it += 1
+    if best_seq is None:  # cancelled before the first descent finished
+        return None, "cancelled", None, False
     a,b,c,d = best_seq
     H, method = williamson_to_hadamard(k, a, b, c, d)
     from .hadamard import verify

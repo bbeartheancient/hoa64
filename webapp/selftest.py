@@ -1,0 +1,729 @@
+"""Webapp selftest — endpoint and JobManager smoke checks.
+
+Runs in-process against `fastapi.testclient.TestClient(create_app())`;
+no server needed.  Mirrors the `hadamard.selftest` reporting style
+(expect/raise, PASS lines, single summary line).
+
+    cd /home/bbear && python -m hoa64.webapp.selftest
+
+Note: the selftest uses paley(108) rather than 92 — 92 is not a Paley
+order (`paley(92)` returns None).  GCP builds powers of two, so the GCP
+check uses order 4.
+"""
+
+from __future__ import annotations
+
+import base64
+import time
+
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+
+
+def selftest() -> int:
+    def expect(cond: bool, msg: str) -> None:
+        if not cond:
+            raise AssertionError(msg)
+
+    from fastapi.testclient import TestClient
+
+    from ..hadamard import paley
+    from .app import create_app
+    from .jobs import JobManager
+
+    client = TestClient(create_app())
+
+    r = client.get("/api/health")
+    expect(r.status_code == 200 and r.json()["status"] == "ok", "health endpoint")
+    print("PASS health")
+
+    r = client.post("/api/construct", json={"order": 64, "method": "sylvester"})
+    d = r.json()
+    expect(r.status_code == 200 and d["ok"], "construct sylvester(64)")
+    expect(d["stats"]["is_hadamard"], "sylvester(64) not hadamard")
+    expect(base64.b64decode(d["png_b64"])[:8] == PNG_MAGIC, "png_b64 bad magic")
+    print("PASS construct sylvester(64)")
+
+    r = client.post("/api/construct", json={"order": 108, "method": "paley"})
+    d = r.json()
+    expect(d["ok"] and d["stats"]["is_hadamard"], "construct paley(108)")
+    print("PASS construct paley(108)")
+
+    r = client.post("/api/construct", json={"order": 4, "method": "gcp", "seed": 1})
+    d = r.json()
+    expect(d["ok"] and d["stats"]["is_hadamard"], "construct gcp(4, seed=1)")
+    print("PASS construct gcp(4)")
+
+    r = client.post("/api/verify", json={"matrix": paley(12).tolist()})
+    d = r.json()
+    expect(d["ok"] and d["stats"]["is_hadamard"], "verify paley(12) matrix")
+    print("PASS verify paley(12)")
+
+    r = client.get("/api/orders", params={"max": 100})
+    d = r.json()
+    expect(r.status_code == 200 and 64 in d["known"], "orders list missing 64")
+    print("PASS orders max=100")
+
+    r = client.get("/")
+    expect(r.status_code == 200 and "hoa64" in r.text, "index page")
+    print("PASS index page")
+
+    jm = JobManager()
+    job = jm.submit("trivial", lambda j: 40 + 2, {})
+    deadline = time.time() + 5.0
+    while job.status in ("queued", "running") and time.time() < deadline:
+        time.sleep(0.02)
+    expect(job.status == "done" and job.result == 42, "JobManager trivial job")
+    print("PASS JobManager")
+
+    # ------------------------------------------------ Phase 2: search API
+    from .jobs import JOBS
+
+    def wait_terminal(job_id: str, timeout: float) -> dict:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            d = client.get(f"/api/search/{job_id}").json()
+            if d["status"] in ("done", "error", "cancelled"):
+                return d
+            time.sleep(0.2)
+        raise AssertionError(f"job {job_id} did not reach terminal state in {timeout}s")
+
+    r = client.post("/api/search", json={"engine": "maxdet", "order": 8, "budget_s": 2})
+    expect(r.status_code == 200 and "job_id" in r.json(), "POST /api/search maxdet")
+    d = wait_terminal(r.json()["job_id"], 15.0)
+    expect(d["status"] == "done", f"maxdet job status {d['status']}")
+    expect(d["result"]["ok"] and d["result"]["stats"]["is_hadamard"], "maxdet result not hadamard")
+    expect(base64.b64decode(d["result"]["png_b64"])[:8] == PNG_MAGIC, "maxdet png bad magic")
+    print("PASS search maxdet(8)")
+    done_job = r.json()["job_id"]
+
+    r = client.post(
+        "/api/search", json={"engine": "micromag", "order": 4, "mode": "sa", "budget_s": 2}
+    )
+    expect(r.status_code == 200, "POST /api/search micromag sa")
+    jid = r.json()["job_id"]
+    time.sleep(1.0)  # TestClient is in-process: the JOBS singleton is shared
+    job = JOBS.get(jid)
+    expect(job is not None, "micromag job missing from JOBS")
+    progress = [m for m in job.history if m["type"] == "progress"]
+    expect(len(progress) >= 1, "micromag sa emitted no progress frames")
+    expect(
+        all(k in progress[0] for k in ("step", "T", "E", "best_E", "accepts")),
+        "micromag progress frame missing keys",
+    )
+    d = wait_terminal(jid, 15.0)
+    expect(d["status"] == "done", f"micromag job status {d['status']}")
+    print(f"PASS search micromag sa(4) — {len(progress)} progress frames")
+
+    r = client.post(
+        "/api/search", json={"engine": "tile", "order": 128, "mode": "sa", "budget_s": 60}
+    )
+    expect(r.status_code == 200, "POST /api/search tile sa")
+    jid = r.json()["job_id"]
+    time.sleep(0.5)
+    r = client.post(f"/api/search/{jid}/cancel")
+    expect(r.status_code == 200 and r.json()["cancelled"], "cancel request failed")
+    d = wait_terminal(jid, 10.0)
+    expect(d["status"] in ("cancelled", "done"), f"tile cancel status {d['status']}")
+    print(f"PASS search cancel (tile sa(128) → {d['status']})")
+
+    with client.websocket_connect(f"/ws/job/{done_job}") as ws:
+        snap = ws.receive_json()
+        expect(snap["type"] == "snapshot" and snap["status"] == "done", "WS snapshot bad")
+        expect(len(snap["history"]) >= 1, "WS snapshot history empty")
+    print("PASS ws snapshot")
+
+    r = client.get("/api/search")
+    expect(r.status_code == 200 and any(j["id"] == done_job for j in r.json()["jobs"]),
+           "search list missing job")
+    print("PASS search list")
+
+    # ------------------------------------------------ Phase 3: micromag sim
+    import numpy as np
+
+    from ..micromag import site_energy, total_energy
+
+    rng = np.random.default_rng(3)
+    Hr = rng.choice([-1, 1], size=(16, 16)).astype(np.int8)
+    S = site_energy(Hr)
+    _, _, E_dem, _ = total_energy(Hr)
+    expect(abs(float(S.sum()) - E_dem) < 1e-6, "site_energy sum != demag energy")
+    print("PASS site_energy sum == E_dem (16×16 random)")
+
+    # sylvester start makes convergence deterministic (random 8 is ~20%)
+    r = client.post(
+        "/api/sim/micromag",
+        json={"order": 8, "budget_s": 2, "field_every_steps": 500, "start": "sylvester"},
+    )
+    expect(r.status_code == 200 and "job_id" in r.json(), "POST /api/sim/micromag")
+    jid = r.json()["job_id"]
+    d = wait_terminal(jid, 15.0)
+    expect(d["status"] == "done", f"sim job status {d['status']}")
+    expect(d["result"]["ok"], "sim result not ok (sylvester start should converge)")
+    job = JOBS.get(jid)
+    field_frames = [m for m in job.history if "field_png_b64" in m]
+    expect(len(field_frames) >= 1, "sim emitted no field_png_b64 frame")
+    expect(
+        base64.b64decode(field_frames[0]["field_png_b64"])[:8] == PNG_MAGIC,
+        "field_png_b64 bad magic",
+    )
+    expect(
+        base64.b64decode(field_frames[0]["grad_png_b64"])[:8] == PNG_MAGIC,
+        "grad_png_b64 bad magic",
+    )
+    expect(
+        any("E_dem" in m for m in job.history if m["type"] == "progress"),
+        "sim progress frames missing energy decomposition",
+    )
+    flux_frames = [m for m in job.history if "flux_png_b64" in m]
+    expect(len(flux_frames) >= 1, "sim emitted no flux_png_b64 frame")
+    expect(
+        base64.b64decode(flux_frames[0]["flux_png_b64"])[:8] == PNG_MAGIC,
+        "flux_png_b64 bad magic",
+    )
+    print(f"PASS sim micromag(8, sylvester) — {len(field_frames)} field frames")
+
+    # flux_map: wall density vs brute-force broken-bond count
+    from ..hadamard import sylvester as _syl
+    from ..micromag import flux_map
+
+    H8 = _syl(8)
+    W = flux_map(H8)
+    bh = int(np.sum(H8 != np.roll(H8, -1, axis=1)))
+    bv = int(np.sum(H8 != np.roll(H8, -1, axis=0)))
+    expect(abs(float(W.sum()) - (bh + bv) / 2.0) < 1e-9, "flux_map wall count mismatch")
+    expect(set(np.unique(W).tolist()) <= {0.0, 0.5, 1.0}, "flux_map values outside {0,½,1}")
+    print(f"PASS flux_map sylvester(8) — {bh + bv} broken bonds, W sum {W.sum():.0f}")
+
+    # ------------------------------------- Item 2: micromag goal attraction
+    from ..hadamard import verify as _verify
+    from ..micromag import micromag_sa
+
+    goal4 = _syl(4)
+    Hg, infog = micromag_sa(
+        4, T_start=2.0, T_end=0.01, cooling=0.9995, max_steps=60000,
+        goal=goal4, lam_goal=5.0, rng=np.random.default_rng(7),
+    )
+    expect(
+        _verify(Hg) and infog["goal_agree"] == 1.0 and infog["E_goal"] == 0.0,
+        "micromag_sa goal path did not anneal onto ±goal",
+    )
+    expect(
+        np.array_equal(Hg, goal4) or np.array_equal(Hg, -goal4),
+        "micromag_sa goal result is not ±goal",
+    )
+    _, info0 = micromag_sa(4, max_steps=2000, rng=np.random.default_rng(7))
+    expect(
+        "goal_agree" not in info0 and "E_goal" not in info0,
+        "goal=None info dict gained goal keys",
+    )
+    try:
+        micromag_sa(4, max_steps=10, goal=_syl(8))
+        raise AssertionError("goal shape mismatch did not raise")
+    except ValueError:
+        pass
+    print("PASS micromag_sa goal attraction (order 4)")
+
+    r = client.post(
+        "/api/sim/micromag",
+        json={"order": 8, "budget_s": 2, "start": "sylvester", "goal_order": 16},
+    )
+    expect(r.status_code == 400, "goal_order != order not rejected")
+    r = client.post(
+        "/api/sim/micromag",
+        json={"order": 8, "budget_s": 2, "start": "library", "goal_order": 8},
+    )
+    expect(r.status_code == 400, "start=library + goal not rejected")
+
+    r = client.post(
+        "/api/sim/micromag",
+        json={"order": 8, "budget_s": 3, "start": "random", "goal_order": 8,
+              "lam_goal": 5.0, "seed": 5},
+    )
+    expect(r.status_code == 200 and "job_id" in r.json(), "POST sim with goal_order")
+    jid = r.json()["job_id"]
+    d = wait_terminal(jid, 15.0)
+    expect(d["status"] == "done", f"goal sim job status {d['status']}")
+    job = JOBS.get(jid)
+    gprog = [m for m in job.history if m["type"] == "progress" and "E" in m]
+    expect(
+        gprog and all("E_goal" in m for m in gprog),
+        "goal sim progress frames missing E_goal",
+    )
+    expect(
+        any("goal_agree" in m for m in gprog),
+        "goal sim progress frames missing goal_agree",
+    )
+    print(f"PASS sim micromag(8, goal) — {len(gprog)} frames with E_goal")
+
+    # ------------------------------------------------ Phase 4: HOA studio
+    from ..analysis import angular_error_deg
+
+    r = client.post("/api/hoa/speakers", json={"preset": "ring8", "order": 3})
+    d = r.json()
+    expect(r.status_code == 200 and len(d["positions"]) == 8, "speakers ring8 positions")
+    expect(
+        len(d["decode_matrix"]) == 8 and len(d["decode_matrix"][0]) == 16,
+        "decode_matrix not 8×16",
+    )
+    expect(d["cond"] > 0 and d["n_channels"] == 16, "speakers cond/n_channels")
+    print("PASS hoa speakers ring8 order 3")
+
+    r = client.post(
+        "/api/hoa/scene",
+        json={
+            "sources": [{"az": 30, "el": 10, "freq": 440}],
+            "order": 3,
+            "duration": 0.05,
+            "wav": True,
+        },
+    )
+    d = r.json()
+    expect(r.status_code == 200, "scene POST")
+    pm = d["power_map"]
+    expect(len(pm["power"]) == 36 and len(pm["power"][0]) == 72, "power_map not 36×72")
+    err = angular_error_deg(d["doa"]["az"], d["doa"]["el"], 30.0, 10.0)
+    expect(err <= 15.0, f"doa off by {err:.1f}°")
+    expect(base64.b64decode(d["power_png_b64"])[:8] == PNG_MAGIC, "power png bad magic")
+    expect("wav_token" in d, "scene wav_token missing")
+    r2 = client.get(f"/api/hoa/wav/{d['wav_token']}")
+    expect(r2.status_code == 200 and r2.content[:4] == b"RIFF", "wav download bad")
+    r3 = client.get(f"/api/hoa/wav/{d['wav_token']}")
+    expect(r3.status_code == 404, "wav token should be one-shot")
+    print(f"PASS hoa scene (doa err {err:.2f}°, wav one-shot OK)")
+
+    r = client.post(
+        "/api/hoa/decode-grid", json={"hoa": [1.0] + [0.0] * 15, "n_azi": 18, "n_el": 9}
+    )
+    d = r.json()
+    expect(
+        r.status_code == 200 and len(d["samples"]) == 18 and len(d["samples"][0]) == 9,
+        "decode-grid samples not 18×9",
+    )
+    expect(base64.b64decode(d["png_b64"])[:8] == PNG_MAGIC, "decode-grid png bad magic")
+    print("PASS hoa decode-grid 18×9")
+
+    from pathlib import Path as _P
+
+    vendor = _P(__file__).parent / "static" / "vendor"
+    three = (vendor / "three.module.js").read_text()[:200]
+    expect("three" in three.lower() and len(three) > 100, "three.module.js header")
+    expect((vendor / "OrbitControls.js").stat().st_size > 10000, "OrbitControls.js size")
+    print("PASS vendor three.js files")
+
+    # ------------------------------------------------ Phase 5a: generative lab
+    from .. import orbitals as _orb
+
+    expect(_orb.selftest() == 0, "orbitals selftest")  # prints its own PASS lines
+
+    r = client.post("/api/gen/terrain", json={"size": 64, "order": 16, "octaves": 3, "seed": 1})
+    d = r.json()
+    expect(r.status_code == 200, "POST /api/gen/terrain")
+    expect(len(d["heightmap"]) == 64 and len(d["heightmap"][0]) == 64, "heightmap not 64²")
+    st = d["stats"]
+    expect(0.0 <= st["min"] <= st["mean"] <= st["max"] <= 1.0, "terrain stats out of bounds")
+    expect(len(d["layers"]) == 3, "terrain layers != octaves")
+    expect(base64.b64decode(d["png_b64"])[:8] == PNG_MAGIC, "terrain png bad magic")
+    for lb in d["layers"]:
+        expect(base64.b64decode(lb)[:8] == PNG_MAGIC, "terrain layer png bad magic")
+    # layers_f32: signed amp-weighted octave contribs on the heightmap grid
+    expect(len(d["layers_f32"]) == 3, "layers_f32 != octaves")
+    for lf in d["layers_f32"]:
+        expect(len(lf) == 64 and len(lf[0]) == 64, "layers_f32 grid != heightmap grid")
+    print("PASS gen terrain (64², 3 layers + layers_f32)")
+
+    r = client.post("/api/gen/terrain", json={"size": 32, "order": 16, "octaves": 9})
+    expect(r.status_code == 400, "octaves > 8 should be 400")
+
+    r = client.post("/api/gen/orbital", json={"n": 2, "l": 1, "m": 0, "samples": 2000, "seed": 1})
+    d = r.json()
+    expect(r.status_code == 200, "POST /api/gen/orbital")
+    expect(len(d["points"]) == 2000 and len(d["points"][0]) == 3, "orbital points not N×3")
+    expect(len(d["weights"]) == 2000, "orbital weights length")
+    expect(d["extent"] > 0.0, "orbital extent <= 0")
+    expect(base64.b64decode(d["proj_png_b64"])[:8] == PNG_MAGIC, "proj png bad magic")
+    print("PASS gen orbital (2p, 2000 pts)")
+
+    r = client.post("/api/gen/noise-field", json={"size": 64, "order": 16, "seed": 1})
+    d = r.json()
+    expect(r.status_code == 200, "POST /api/gen/noise-field")
+    expect(len(d["grid"]) == 64 and len(d["grid"][0]) == 64, "noise grid not 64²")
+    expect(base64.b64decode(d["png_b64"])[:8] == PNG_MAGIC, "noise png bad magic")
+    print("PASS gen noise-field (64²)")
+
+    # ------------------------------------------------ Phase 5b: library / DAG
+    from ..game_of_hadamard import classify_orders
+
+    cd = classify_orders(128)
+    expect(64 in cd["built"], "classify_orders(128): 64 not built")
+    expect(64 not in cd["gaps"], "classify_orders(128): 64 in gaps")
+    expect(64 in cd["labels"] and 64 in cd["depths"], "classify_orders labels/depths")
+    print(f"PASS classify_orders(128) — {len(cd['built'])} built, {len(cd['gaps'])} gaps")
+
+    # 1212 = 4·303 is the first true gap (1211 = 7·173 kills Paley I)
+    r = client.get("/api/dag", params={"max": 1300})
+    d = r.json()
+    expect(r.status_code == 200 and 64 in d["built"], "GET /api/dag")
+    expect(len(d["gaps"]) > 0 and not (set(d["gaps"]) & set(d["built"])), "dag gaps bad")
+    expect(1212 in d["gaps"], "dag: 1212 should be a gap")
+    print(f"PASS dag max=1300 — {len(d['built'])} built, gaps {d['gaps'][:3]}")
+
+    r = client.get("/api/detbounds", params={"max": 64})
+    d = r.json()
+    expect(r.status_code == 200 and len(d["entries"]) >= 8, "GET /api/detbounds")
+    by_order = {e["order"]: e for e in d["entries"]}
+    for n in (1, 2, 4, 8, 16, 32, 64):  # Sylvester attains the Hadamard bound
+        e = by_order[n]
+        expect(
+            abs(e["det_log10"] - e["det_bound_log10"]) < 1e-6,
+            f"sylvester({n}) det {e['det_log10']} != bound {e['det_bound_log10']}",
+        )
+    for e in d["entries"]:
+        if e["det_log10"] is not None:
+            expect(
+                e["det_log10"] <= e["det_bound_log10"] + 1e-6,
+                f"order {e['order']} det over the Hadamard bound",
+            )
+    print(f"PASS detbounds max=64 — {len(d['entries'])} entries, sylvester at bound")
+
+    # ------------------------------------------------ ℍ³ hadamard space
+    from .. import hadamard_space as _hs
+
+    expect(_hs.selftest() == 0, "hadamard_space selftest")  # own PASS lines
+
+    r = client.post("/api/viz/hadamard-space", json={"order": 16, "mode": "rows", "kappa": 1})
+    d = r.json()
+    expect(r.status_code == 200, "POST /api/viz/hadamard-space rows")
+    expect(len(d["points"]) == 16 and len(d["points"][0]) == 3, "space points not 16×3")
+    expect(
+        all(sum(x * x for x in p) < 1.0 for p in d["points"]),
+        "poincaré point outside the ball",
+    )
+    expect(len(d["geodesics"]) >= 1, "no geodesics returned")
+    expect(
+        all(len(g) >= 8 and len(g[0]) == 3 for g in d["geodesics"]),
+        "geodesic polylines malformed",
+    )
+    print(f"PASS viz hadamard-space rows (16 pts, {len(d['geodesics'])} geodesics)")
+
+    r = client.post("/api/viz/hadamard-space", json={"order": 16, "mode": "lattice", "kappa": 1})
+    d = r.json()
+    expect(r.status_code == 200, "POST /api/viz/hadamard-space lattice")
+    expect(
+        len(d["verts"]) == 16 and len(d["verts"][0]) == 16 and len(d["verts"][0][0]) == 3,
+        "lattice verts not 16×16×3",
+    )
+    expect(set(sum(d["colors"], [])) <= {0, 1}, "lattice colors not ±1-derived")
+    print("PASS viz hadamard-space lattice (16² grid)")
+
+    r = client.post("/api/viz/hadamard-space", json={"order": 3})
+    expect(r.status_code == 400, "order 3 should be 400")
+    print("PASS viz hadamard-space rejects order 3")
+
+    # ------------------------------------------------ Phase 4.5: HUD themes
+    r = client.get("/css/themes.css")
+    expect(r.status_code == 200 and '[data-theme="dmg"]' in r.text, "themes.css dmg")
+    expect('[data-theme="plasma"]' in r.text and "--ramp-3" in r.text, "themes.css ramps")
+    print("PASS themes.css")
+
+    r = client.get("/js/theme.js")
+    expect(r.status_code == 200 and "THEMES" in r.text and "recolorCanvas" in r.text,
+           "theme.js exports")
+    print("PASS theme.js")
+
+    r = client.get("/js/viz/shaders.js")
+    expect(r.status_code == 200 and "CRT_FRAG" in r.text and "DMG_FRAG" in r.text,
+           "shaders.js fragments")
+    expect("ELECTRIC_FRAG" in r.text and "QUANTUM_FRAG" in r.text, "shaders.js reserved frags")
+    # Item 1 fix: DMG_FRAG quantizes through a nearest-stop palette carried
+    # in uniform arrays (uPal[8]/uPalLum[8]/uPalCount + uPalEnabled,
+    # installed by setPalette() from paletteStops()) — the earlier 256×1
+    # DataTexture LUT went black on three r170's WebGL2 renderer
+    # (RGBFormat/UNSIGNED_BYTE → unsized gl.RGB); the pixel-grid term
+    # stays; QUANTUM_FRAG rides the cloud's uDensity
+    expect("uPal[8]" in r.text and "uPalLum" in r.text and "uPalCount" in r.text
+           and "uPalEnabled" in r.text and "uBivert" in r.text
+           and "setPalette" in r.text and "paletteStops" in r.text,
+           "shaders.js DMG palette uniform arrays")
+    expect("uniform sampler2D uPalTex" not in r.text
+           and "paletteLutBytes" not in r.text
+           and "setPaletteTexture" not in r.text,
+           "shaders.js old palette LUT texture gone")
+    expect("fract(vUv * uRes)" in r.text, "DMG_FRAG pixel grid kept")
+    expect("uDensity" in r.text and "uDensityOn" in r.text,
+           "QUANTUM_FRAG radial density coupling")
+    print("PASS shaders.js")
+
+    # ------------------------------------------- Phase 6: CGB + settings panel
+    r = client.get("/css/themes.css")
+    expect('[data-theme="cgb"]' in r.text, "themes.css cgb block")
+    expect('[data-theme="cgb"][data-variant="dark"]' in r.text, "themes.css cgb dark variant")
+    expect('[data-theme="vga"][data-subtheme="cyberpunk"]' in r.text
+           and '[data-theme="vga"][data-subtheme="thirdman"]' in r.text
+           and '[data-theme="vga"][data-subtheme="evangelion"]' in r.text,
+           "themes.css vga subthemes")
+    # each VGA subtheme block must override --bg — otherwise switching
+    # subthemes leaves the previous theme's background in place
+    for _sub in ("cyberpunk", "thirdman", "evangelion"):
+        _i = r.text.find(f'[data-theme="vga"][data-subtheme="{_sub}"]')
+        expect(_i >= 0 and "--bg" in r.text[_i:_i + 400],
+               f"themes.css vga {_sub} --bg override")
+    print("PASS themes.css phase 6 blocks")
+
+    r = client.get("/js/theme.js")
+    expect('cgb: {' in r.text and '"palette56"' in r.text
+           and "_lerpStops(DMG_ANCHORS, 56)" in r.text,
+           "theme.js CGB 56-stop gradient (5bit snap replaced)")
+    expect("themeRamp" in r.text and "ghostAmount" in r.text
+           and "getSetting" in r.text, "theme.js phase 6 exports")
+    # Item 9: display adjustments moved out of the LUT into a global CSS
+    # filter on #app (settings.js) — the old per-canvas API must be gone
+    expect("applyDisplayAdjustments" not in r.text, "theme.js LUT adjustments removed")
+    # Item 8: subtheme/variant switches must re-fire themechange so
+    # canvas/three consumers re-render under the new palette
+    expect('key === "vgaSubtheme" || key === "cgbVariant"' in r.text
+           and '"themechange"' in r.text, "theme.js subtheme fires themechange")
+    print("PASS theme.js phase 6")
+
+    # ---------------- Phase 7: exact DMG palette, mono ramps, glow, packs ---
+    expect('"#1b2a09", "#0e450b", "#496b22", "#9a9e3f"' in r.text,
+           "theme.js DMG exact 4-shade palette")
+    expect("setCgbPalette" in r.text and "cgbPalette" in r.text,
+           "theme.js CGB palette-pack support")
+    expect("bivertInLut" in r.text, "theme.js DMG/CGB bivert in LUT")
+    expect('--glow-eff' in r.text and "_applyGlow" in r.text,
+           "theme.js brightness-driven phosphor glow")
+    r = client.get("/css/themes.css")
+    _i = r.text.find('[data-theme="dmg"]')
+    expect(_i >= 0 and "--fg: #1b2a09" in r.text[_i:_i + 400]
+           and "--bg: #9a9e3f" in r.text[_i:_i + 400],
+           "themes.css DMG exact palette assignment")
+    r = client.get("/css/app.css")
+    expect("var(--glow-eff, var(--glow))" in r.text, "app.css glow-eff text-shadow")
+    print("PASS phase 7 theme core")
+
+    # ----- Item 5/7: forward LUT semantics, dmgLut, VGA subtheme colors ----
+    r = client.get("/js/theme.js")
+    expect("export function dmgLut" in r.text, "theme.js dmgLut helper")
+    # the old inverted-theme LUT reversal made mostly-dark server PNGs a
+    # solid light rectangle (micromag energy viewport) — it must stay gone;
+    # only bivertInLut may reverse the ramp now
+    expect("if (t.inverted) ramp" not in r.text, "theme.js inverted LUT walk removed")
+    expect("bivertInLut" in r.text, "theme.js bivert still reverses the LUT")
+    expect('blue: { bg: "#0000a8"' in r.text
+           and 'cyberpunk: { bg: "#000000"' in r.text,
+           "theme.js VGA subthemes carry bg/fg")
+    expect('if (_current === "vga" && (name === "bg" || name === "fg"))' in r.text,
+           "theme.js themeColor resolves vga subtheme bg/fg")
+    print("PASS theme.js item 5/7 LUT semantics")
+
+    # ----- Item 3: bivert full theme reversal + max-channel LUT + 3D lift ---
+    expect("_biverted" in r.text and "fg: c.bg, bg: c.fg" in r.text
+           and "_applyChrome" in r.text,
+           "theme.js bivert swaps chrome vars on <html> (in-palette)")
+    # intensity = max channel: Rec.601 luma capped pure green at ~149 and
+    # never reached the lightest DMG shade — the coefficients must be gone
+    expect("Math.max(s[i], s[i + 1], s[i + 2])" in r.text
+           and "s[i + 1] * 150" not in r.text,
+           "theme.js canvas LUT uses max-channel intensity")
+    # themeRampSample: bivert un-reverses the inverted walk (chrome is
+    # swapped too); inverted-family sampling lifted to the upper 60% of the
+    # ramp so 3D views keep min contrast against the background
+    expect("t.inverted !== _biverted()" in r.text
+           and "0.4 + 0.6 * xu" in r.text,
+           "theme.js themeRampSample bivert walk + contrast lift")
+    print("PASS theme.js item 3 bivert/LUT/lift")
+
+    # icons + controls.js (themed number steppers / file browse)
+    for icon in ("arrow-up.svg", "arrow-down.svg", "browse.svg"):
+        ri = client.get(f"/assets/icons/{icon}")
+        expect(ri.status_code == 200 and "currentColor" in ri.text,
+               f"icon {icon} serves, currentColor")
+    r = client.get("/js/controls.js")
+    expect(r.status_code == 200 and "enhanceControls" in r.text
+           and "stepUp" in r.text, "controls.js served")
+    # Item 1: the file browse button is text-only now — no icon mask
+    expect("browse.svg" not in r.text and "ico-browse" not in r.text,
+           "controls.js text-only browse button")
+    r = client.get("/js/main.js")
+    expect("enhanceControls" in r.text, "main.js enhanceControls hook")
+    print("PASS icons + controls.js")
+
+    # palette packs endpoint: parsed emulator .pal library
+    r = client.get("/api/palettes")
+    expect(r.status_code == 200, "GET /api/palettes")
+    _pals = r.json()["palettes"]
+    expect(len(_pals) >= 1 and len(_pals[0]["colors"]) >= 2
+           and all(c.startswith("#") and len(c) == 7 for c in _pals[0]["colors"]),
+           "/api/palettes ≥1 parsed palette with ≥2 #hex colors")
+    expect(_pals[0]["category"] and _pals[0]["name"], "/api/palettes category/name")
+    print(f"PASS /api/palettes ({len(_pals)} palettes)")
+
+    r = client.get("/js/viz/shaders.js")
+    expect("GHOST_FRAG" in r.text and "ghostAmount" in r.text, "shaders.js ghosting")
+    print("PASS shaders.js ghosting")
+
+    r = client.get("/")
+    expect('id="settings-btn"' in r.text and 'id="settings-panel"' in r.text,
+           "settings panel markup")
+    expect('class="crt-fx"' in r.text and "themes.css" in r.text, "crt overlay / themes link")
+    expect("theme-switch" not in r.text, "theme buttons moved into the settings panel")
+    print("PASS settings panel markup")
+
+    r = client.get("/js/settings.js")
+    expect(r.status_code == 200 and "data-theme-id" in r.text and "setSetting" in r.text,
+           "settings.js theme buttons + settings wiring")
+    expect("DISPLAY_CONTROLS" in r.text and "vgaSubtheme" in r.text
+           and "cgbVariant" in r.text, "settings.js per-display controls")
+    # dmg/cgb bivert is the in-palette chrome swap in theme.js — the #app
+    # invert(1) filter must stay EXCLUSIVE to plasma (bivertInLut exclusion)
+    expect("!THEMES[currentTheme()].bivertInLut" in r.text,
+           "settings.js invert(1) filter excluded for dmg/cgb")
+    print("PASS settings.js")
+
+    # ---------------- UI overhaul: single-viewport tabs + global filter -----
+    r = client.get("/")
+    expect('id="app"' in r.text, "index #app wrapper (global filter target)")
+    r = client.get("/js/settings.js")
+    expect("applyGlobalFilter" in r.text and "#app" in r.text,
+           "settings.js global display filter on #app")
+    expect("settings-close" in r.text and "Escape" in r.text,
+           "settings.js dismissal (X / Esc / click-outside)")
+    r = client.get("/js/tabs/matrix_lab.js")
+    expect("startMorph" in r.text and "sp-overlay" in r.text,
+           "matrix_lab in-place 2D→3D transmute morph")
+    r = client.get("/js/tabs/search_studio.js")
+    expect("run-viz" in r.text, "search_studio unified run panel")
+    r = client.get("/js/tabs/micromag_sim.js")
+    expect("sim-layer-select" in r.text and "data-layer" in r.text,
+           "micromag layer select")
+    expect("sim-wave-select" in r.text and "data-series" in r.text
+           and "waveChart" in r.text, "micromag unified waveform + series select")
+    r = client.get("/js/viz/stripchart.js")
+    expect("setVisible" in r.text, "stripchart series visibility")
+    r = client.get("/js/tabs/terrain.js")
+    expect("ter-layer-select" in r.text and "showTerLayer" in r.text,
+           "terrain layer view")
+    expect("data-oct" in r.text and "layers_f32" in r.text
+           and "recombHeight" in r.text, "terrain octave mute/solo recombination")
+    # Item 3: 3D viewport and layer view are equal-size 1:1 panels, layer
+    # view LEFT; controls moved to the sidebar; renderer display size is
+    # CSS-owned (setSize updateStyle=false) so no inline-style drift
+    expect("ter-views" in r.text, "terrain equal-size viewport row")
+    expect("setSize(w, h, false)" in r.text and '"Layers"' in r.text,
+           "terrain CSS-owned canvas size + sidebar layer controls")
+    r = client.get("/css/app.css")
+    expect(".ter-views > .panel" in r.text and ".ter-views canvas" in r.text,
+           "app.css ter-views flex + 1:1 canvas rules")
+    r = client.get("/js/tabs/orbitals.js")
+    expect("orb-layer-select" in r.text and "selectOrbLayer" in r.text,
+           "orbitals unified 3D/XZ viewport")
+    expect("splatXZ" in r.text and "d.proj_png_b64" not in r.text,
+           "orbitals client-side XZ splat (server proj unused)")
+    # Item 4: [3D][XZ][BOTH] — BOTH overlays a transparent-cleared cloud on
+    # the dimmed splat; Item 2: QUANTUM_FRAG clipped inside the viewport
+    # (overflow:hidden), driven by the cloud's radial density profile, and
+    # fed into the 3D scene as scene.background via CanvasTexture
+    expect('"both"' in r.text and "alpha: true" in r.text
+           and "initQuantum(viewportEl)" in r.text
+           and 'orbLayer !== "both"' in r.text,
+           "orbitals BOTH overlay + quantum-in-viewport")
+    expect("overflow:hidden" in r.text and "scene3d.background" in r.text
+           and "CanvasTexture" in r.text,
+           "orbitals quantum clipped + scene background")
+    expect("radialProfile" in r.text and '"uDensity"' in r.text
+           and "uDensityOn" in r.text,
+           "orbitals quantum driven by the cloud radial profile")
+    # Item 3: the post pipeline must get the ACTIVE ramp (palette packs /
+    # subthemes), never the static THEMES entry
+    for _tab in ("terrain", "orbitals", "hoa_studio", "matrix_lab"):
+        _t = client.get(f"/js/tabs/{_tab}.js").text
+        expect("THEMES[currentTheme()].ramp" not in _t
+               and "themeRamp()" in _t,
+               f"{_tab} post pipeline uses themeRamp()")
+    print("PASS UI overhaul markers")
+
+    # ---------------- static integrity (module-graph regression guard) -----
+    # A top-level throw in main.js/theme.js/settings.js kills the whole
+    # module graph and all tab wiring (the Phase-6 TDZ bug). Guard the two
+    # statically checkable halves of that class: every asset the page
+    # references must serve, and every named import from /js/theme.js used
+    # anywhere in js/ must be a real export of the rewritten theme.js.
+    import json as _json
+    import re as _re
+    from pathlib import Path as _Path
+
+    r = client.get("/")
+    expect('type="importmap"' in r.text, "index importmap present")
+    assets = set(_re.findall(r'(?:src|href)="(/[^"]*)"', r.text))
+    assets -= {"//"}  # protocol-relative would be external; none expected
+    for a in sorted(assets):
+        ra = client.get(a)
+        expect(ra.status_code == 200, f"index asset {a} → {ra.status_code}")
+    imp = _re.search(r'type="importmap">(.*?)</script>', r.text, _re.S)
+    for name, path in _json.loads(imp.group(1))["imports"].items():
+        rp = client.get(path)
+        expect(rp.status_code == 200, f"importmap {name} → {path} → {rp.status_code}")
+    print(f"PASS static assets ({len(assets)} refs + importmap resolve)")
+
+    theme_src = client.get("/js/theme.js").text
+    exported = set(_re.findall(r"export (?:function|const|let) (\w+)", theme_src))
+    for block in _re.findall(r"export \{([^}]*)\}", theme_src):
+        for n in block.split(","):
+            n = n.strip().split(" as ")[-1].strip()
+            if n:
+                exported.add(n)
+    js_root = _Path(__file__).parent / "static" / "js"
+    n_imports = 0
+    for js in sorted(js_root.rglob("*.js")):
+        src = js.read_text()
+        for block in _re.findall(
+            r'import\s*\{([^}]*)\}\s*from\s*["\']/js/theme\.js["\']', src
+        ):
+            for n in block.split(","):
+                n = n.strip().split(" as ")[0].strip()
+                if not n:
+                    continue
+                n_imports += 1
+                expect(n in exported,
+                       f"{js.name} imports '{n}' from theme.js but theme.js does not export it")
+        # every fetched module must also serve over HTTP
+        rel = "/js/" + str(js.relative_to(js_root)).replace("\\", "/")
+        expect(client.get(rel).status_code == 200, f"{rel} serves")
+    print(f"PASS theme.js exports cover {n_imports} named imports across js/")
+
+    # ---------------- frontend path pinning (Bug 1 regression guard) ------
+    # Every URL the tab JS fetches must exist with the method the JS uses;
+    # unknown /api/* paths must 404 (never fall through to StaticFiles 405).
+    frontend_calls = [
+        ("POST", "/api/search", {"engine": "maxdet", "order": 8, "budget_s": 2}),
+        ("POST", "/api/sim/micromag", {"order": 8, "budget_s": 2, "start": "sylvester"}),
+        ("POST", "/api/hoa/speakers", {"preset": "ring8", "order": 3}),
+        ("POST", "/api/hoa/scene", {"sources": [{"az": 30, "el": 10, "freq": 440}],
+                                    "order": 3, "duration": 0.05, "wav": False}),
+        ("POST", "/api/hoa/decode-grid", {"hoa": [1.0] + [0.0] * 15, "n_azi": 6, "n_el": 3}),
+        ("POST", "/api/gen/terrain", {"size": 32, "order": 16, "octaves": 2, "seed": 1}),
+        ("POST", "/api/gen/orbital", {"n": 2, "l": 1, "m": 0, "samples": 500, "seed": 1}),
+        ("POST", "/api/gen/noise-field", {"size": 32, "order": 16, "seed": 1}),
+        ("GET", "/api/dag?max=128", None),
+        ("GET", "/api/detbounds?max=64", None),
+        ("GET", "/api/palettes", None),
+        ("POST", "/api/construct", {"order": 64, "method": "sylvester"}),
+        ("GET", "/api/library/64", None),
+        ("POST", "/api/verify", {"matrix": [[1, 1], [1, -1]]}),
+        ("POST", "/api/viz/hadamard-space", {"order": 16, "mode": "rows", "kappa": 1}),
+    ]
+    for method, path, body in frontend_calls:
+        r = client.request(method, path, json=body) if body is not None else client.request(method, path)
+        expect(r.status_code != 405, f"frontend path 405: {method} {path}")
+        expect(r.status_code < 500, f"frontend path {r.status_code}: {method} {path}")
+    r = client.post("/api/definitely-not-a-route", json={})
+    expect(r.status_code == 404 and "no such API endpoint" in r.json()["detail"],
+           "api catch-all should 404, got " + str(r.status_code))
+    print(f"PASS frontend paths pinned ({len(frontend_calls)} calls non-405, catch-all 404)")
+
+    print("selftest: all checks passed")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(selftest())

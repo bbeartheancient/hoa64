@@ -44,11 +44,18 @@ def _swap_random(H, rng):
 
 
 def tile_sa_swap(order, T_start=20.0, T_end=0.01, cooling=0.9995,
-                 max_steps=20000, rng=None):
+                 max_steps=20000, rng=None, callback=None, stop_flag=None):
     """Tile‑based SA using swap moves (preserves polarity count).
 
     Each proposal: pick two random interior tiles, flip both simultaneously.
     This preserves the total +1/−1 count and the H2 cell structure.
+
+    Optional streaming hooks (zero behavior change when omitted):
+    - callback(dict): called every 500 steps with
+      {"step", "T", "E", "best_E", "accepts", "H"} — H is the current
+      best ±1 matrix (for live previews; never serialized).
+    - stop_flag (threading.Event): checked every 500 steps; break early
+      when set, returning the current best.
     """
     rng = rng or np.random.default_rng()
     H = random_seed(order, rng).astype(np.int8)
@@ -82,16 +89,28 @@ def tile_sa_swap(order, T_start=20.0, T_end=0.01, cooling=0.9995,
         steps += 1
         T *= cooling
 
+        if steps % 500 == 0:
+            if callback is not None:
+                callback({"step": steps, "T": T, "E": E_cur,
+                          "best_E": best_E, "accepts": accepts, "H": best_H})
+            if stop_flag is not None and stop_flag.is_set():
+                break
+
     return best_H, dict(steps=steps, accepts=accepts, best_E=best_E,
                          elapsed_s=time.monotonic()-t0, hadamard=(best_E < 1e-6))
 
 
 def tile_ils(order, T_start=20.0, cooling=0.9995, sa_steps=15000,
-             restarts=5, time_budget=None, rng=None):
-    """ILS with tile‑based SA inner loop."""
+             restarts=5, time_budget=None, rng=None, stop_flag=None):
+    """ILS with tile‑based SA inner loop.
+
+    stop_flag (threading.Event, optional): checked at each restart
+    boundary — break out early and return the current best when set.
+    """
     rng = rng or np.random.default_rng()
     best_H = None; best_f = None; it = 0; t0 = time.monotonic()
     while it < restarts:
+        if stop_flag is not None and stop_flag.is_set(): break
         if time_budget and time.monotonic() - t0 > time_budget: break
         H, st = tile_sa_swap(order, T_start=T_start, cooling=cooling,
                         max_steps=sa_steps, rng=rng)
@@ -101,4 +120,4 @@ def tile_ils(order, T_start=20.0, cooling=0.9995, sa_steps=15000,
             best_H = H.copy(); best_f = f
         it += 1
         T_start = min(30.0, T_start * 1.3)
-    return best_H, best_f, verify(best_H)
+    return best_H, best_f, (best_H is not None and verify(best_H))

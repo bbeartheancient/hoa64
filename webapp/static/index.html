@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="mono">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hoa64 — hadamard lab</title>
+<script type="importmap">
+{"imports": {
+  "three": "/vendor/three.module.js",
+  "three/addons/controls/OrbitControls.js": "/vendor/OrbitControls.js"
+}}
+</script>
+<link rel="stylesheet" href="/css/themes.css">
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<div id="app">
+<header class="topbar">
+  <span class="logo">hoa64</span>
+  <span class="subtitle">— hadamard lab</span>
+  <span class="hud-accent">未来 0001/8129_SYS</span>
+  <span class="spacer"></span>
+  <button class="ts-btn" id="settings-btn" title="Display settings">[SET]</button>
+</header>
+<aside id="settings-panel" aria-label="Display settings"></aside>
+<nav class="tabs" id="tabs">
+  <button class="tab active" data-tab="matrix_lab">Matrix Lab</button>
+  <button class="tab" data-tab="search_studio">Search Studio</button>
+  <button class="tab" data-tab="micromag_sim">Micromag Sim</button>
+  <button class="tab" data-tab="hoa_studio">HOA Studio</button>
+  <button class="tab" data-tab="terrain">Terrain</button>
+  <button class="tab" data-tab="orbitals">Orbitals</button>
+  <button class="tab" data-tab="library">Library</button>
+</nav>
+<main id="tab-content"></main>
+<div class="crt-fx"></div>
+</div>
+<script type="module" src="/js/main.js"></script>
+</body>
+</html>

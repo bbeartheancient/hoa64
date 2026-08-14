@@ -1,0 +1,94 @@
+/* hoa64 webapp — retro-HUD theme system (Phase 4.5, extended in Phase 6).
+ * Seven runtime-switchable monitor themes applied via data-theme on <html>.
+ * VGA subthemes (data-subtheme) and the CGB dark variant (data-variant)
+ * override chrome colors only — visualizer ramps for those live in
+ * js/theme.js (themeRamp). All colors flow through custom properties;
+ * js/theme.js mirrors the same values for canvas/GL recoloring. */
+
+:root {
+  /* fallback = mono */
+  --fg: #f2f2f2;
+  --bg: #000000;
+  --dim: #8a8a8a;
+  --faint: #262626;
+  --accent: #ffffff;
+  --panel-line: #3a3a3a;
+  --glow: transparent;
+  --ramp-0: #1a1a1a;
+  --ramp-1: #6a6a6a;
+  --ramp-2: #b0b0b0;
+  --ramp-3: #f2f2f2;
+}
+
+/* 1 — mono: plain monochrome terminal (soft white glow, brightness-driven) */
+[data-theme="mono"] {
+  --fg: #f2f2f2; --bg: #000000; --dim: #8a8a8a; --faint: #262626;
+  --accent: #ffffff; --panel-line: #3a3a3a; --glow: #f2f2f233;
+  --ramp-0: #000000; --ramp-1: #515151; --ramp-2: #a1a1a1; --ramp-3: #f2f2f2;
+}
+
+/* 2 — green: P1 phosphor CRT */
+[data-theme="green"] {
+  --fg: #33ff66; --bg: #020603; --dim: #1f7a3d; --faint: #0a2614;
+  --accent: #baffd0; --panel-line: #14532d; --glow: #33ff6644;
+  --ramp-0: #020603; --ramp-1: #125924; --ramp-2: #23ac45; --ramp-3: #33ff66;
+}
+
+/* 3 — amber: P3 phosphor CRT */
+[data-theme="amber"] {
+  --fg: #ffb000; --bg: #080400; --dim: #8a5c00; --faint: #241500;
+  --accent: #ffe1a0; --panel-line: #4a2f00; --glow: #ffb00044;
+  --ramp-0: #080400; --ramp-1: #5a3d00; --ramp-2: #ad7700; --ramp-3: #ffb000;
+}
+
+/* 4 — plasma: Compaq Portable III red/orange gas plasma, harsh ramp */
+[data-theme="plasma"] {
+  --fg: #ff4a1f; --bg: #0d0200; --dim: #7a2410; --faint: #260801;
+  --accent: #ffb59d; --panel-line: #571a0c; --glow: #ff5a2a66;
+  --ramp-0: #1a0500; --ramp-1: #8a1f08; --ramp-2: #ff4a1f; --ramp-3: #ffb59d;
+}
+
+/* 5 — dmg: GameBoy DMG greenscale LCD — INVERTED (light background).
+ * Exact user-specified palette (Item 7), matched in js/theme.js; bivert
+ * reverses the ramp in the LUT so inverted pixels stay in-palette. */
+[data-theme="dmg"] {
+  --fg: #1b2a09; --bg: #9a9e3f; --dim: #0e450b; --faint: #496b22;
+  --accent: #1b2a09; --panel-line: #0e450b; --glow: transparent;
+  --ramp-0: #1b2a09; --ramp-1: #0e450b; --ramp-2: #496b22; --ramp-3: #9a9e3f;
+}
+
+/* 6 — cgb: GameBoy Color LCD — INVERTED (DMG anchor family expanded to a
+ * 56-step backlight gradient, see js/theme.js; palette packs override
+ * --fg/--bg/--dim/--faint inline on <html>). Dark variant flips the anchors
+ * via [data-variant="dark"] (settings panel). */
+[data-theme="cgb"] {
+  --fg: #1b2a09; --bg: #9a9e3f; --dim: #0e450b; --faint: #496b22;
+  --accent: #0e450b; --panel-line: #0e450b; --glow: transparent;
+  --ramp-0: #1b2a09; --ramp-1: #0e450b; --ramp-2: #496b22; --ramp-3: #9a9e3f;
+}
+[data-theme="cgb"][data-variant="dark"] {
+  --fg: #9a9e3f; --bg: #1b2a09; --dim: #496b22; --faint: #0e450b;
+  --accent: #9a9e3f; --panel-line: #496b22;
+}
+
+/* 7 — vga: 256-color-era DOS IDE (soft silver glow, brightness-driven) */
+[data-theme="vga"] {
+  --fg: #c0c0c0; --bg: #0000a8; --dim: #7a7ac0; --faint: #10106a;
+  --accent: #ffff55; --panel-line: #3a3ad0; --glow: #c0c0c033;
+  --ramp-0: #000055; --ramp-1: #5555ff; --ramp-2: #55ffff; --ramp-3: #ffffff;
+}
+
+/* vga subthemes (Feature 8) — chrome overrides, selected via the settings
+ * panel and applied as [data-subtheme] on <html>. */
+[data-theme="vga"][data-subtheme="cyberpunk"] {
+  --fg: #ffe600; --bg: #000000; --dim: #8a7a00; --faint: #2a2400;
+  --accent: #00e0c0; --panel-line: #3a3400;
+}
+[data-theme="vga"][data-subtheme="thirdman"] {
+  --fg: #f0f0f0; --bg: #000000; --dim: #8a8a8a; --faint: #262626;
+  --accent: #e02020; --panel-line: #3a3a3a;
+}
+[data-theme="vga"][data-subtheme="evangelion"] {
+  --fg: #ffe600; --bg: #000000; --dim: #8a7a00; --faint: #2a2400;
+  --accent: #ff2020; --panel-line: #3a3400;
+}

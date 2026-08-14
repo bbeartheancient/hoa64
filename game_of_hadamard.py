@@ -102,6 +102,27 @@ def _depths(built, claimed):
     return d
 
 
+def classify_orders(max_n):
+    """Importable classification snapshot — the webapp /api/dag data source.
+
+    Returns dict(built, claimed, gaps: sorted order lists (built includes
+    1 and 2; gaps are the remaining multiples of 4), labels: {order:
+    sorted glyph list} for every built|claimed order, depths: {order:
+    Kronecker-DAG depth}).  The terminal `evolve` animation renders the
+    same classification live.
+    """
+    built, claimed = _classify(max_n)
+    all_n = sorted(built | claimed)
+    gaps = [n for n in range(4, max_n + 1, 4) if n not in built and n not in claimed]
+    return {
+        "built": sorted(built),
+        "claimed": sorted(claimed),
+        "gaps": gaps,
+        "labels": {n: sorted(_method_label(n, built, claimed)) for n in all_n},
+        "depths": _depths(built, claimed),
+    }
+
+
 def evolve(max_n=128, pause=0.3, max_gen=None):
     built, claimed = _classify(max_n)
     all_n = sorted(built | claimed)

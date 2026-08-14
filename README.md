@@ -28,6 +28,9 @@ python3 -m hoa64.game_of_hadamard -n 128
 
 # Rebuild the CSV library from scratch (requires SageMath)
 python3 rebuild.py
+
+# Web GUI ("hadamard lab") on 127.0.0.1:8770
+python3 -m hoa64.cli webapp
 ```
 
 ## Core Modules
@@ -47,6 +50,10 @@ python3 rebuild.py
 | `game_of_hadamard.py` | Conway‑style construction DAG visualization |
 | `gcp_hadamard.py` | GCP‑based Hadamard (length‑10 GCP verified) |
 | `row_builder.py` | α,β,γ,δ counting analyser |
+| `terrain.py` | Hadamard‑layered Perlin fBm terrain generator |
+| `orbitals.py` | Hydrogenic real‑orbital \|ψ\|² sampler (SN3D convention) |
+| `hadamard_space.py` | ℍ³ transmute: row‑simplex PCA → Poincaré ball |
+| `webapp/` | FastAPI + vanilla‑JS web GUI (see Webapp below) |
 | `rh.py` | RH |Δₙ| bound checker |
 
 ## Construction Methods Implemented
@@ -72,6 +79,51 @@ python3 rebuild.py
 - **RNN‑guided** — LSTM scores candidate seeds before micromag descent
 - **Signature‑guided** — predicted block signature seeds from trained model
 
+## Webapp
+
+A FastAPI + vanilla‑JS (no build step) web GUI — the "hadamard lab".
+Launch it with:
+
+```bash
+python3 -m hoa64.cli webapp            # serves 127.0.0.1:8770
+python3 -m hoa64.cli webapp --host 0.0.0.0 --port 9000
+```
+
+Dependencies (into the working env, e.g. sage‑dev):
+
+```bash
+pip install fastapi 'uvicorn[standard]' httpx
+```
+
+Smoke‑check the whole thing in‑process (no server needed):
+
+```bash
+python3 -m hoa64.webapp.selftest
+```
+
+Tabs:
+
+- **Matrix Lab** — construct/verify matrices, pixel‑art preview, ℍ³
+  transmute (row‑simplex PCA → Poincaré ball with geodesics)
+- **Search Studio** — launch max‑det/micromag/tile search jobs, live
+  progress over WebSocket, mid‑run retune, export to library
+- **Micromag Sim** — annealing lab with live site‑energy/gradient/flux
+  heatmaps, waveforms, and library‑goal evolution (E_goal/goal_agree)
+- **HOA Studio** — speaker‑array designer, scene encode/rotate/analyze
+- **Terrain** — Hadamard‑layered fBm heightfield with per‑octave mute/solo
+- **Orbitals** — hydrogenic |ψ|² point cloud (3D / XZ splat / both)
+- **Library** — construction‑DAG classification and achieved‑vs‑bound chart
+
+Seven retro‑monitor themes (MONO, P1, AMB, PLS, DMG, CGB, VGA — VGA with
+four subthemes), a settings panel with per‑display controls (brightness,
+contrast, saturation, bivert, DMG ghosting, CGB palette packs), and an
+original GLSL layer (CRT/DMG post passes, electric/quantum/flux shaders).
+
+**Security:** the server is unauthenticated and binds to localhost by
+default; several endpoints take filesystem paths.  Treat it as
+trusted‑local only — do not expose it on a public interface without
+adding auth.
+
 ## Models
 
 - `rnn_hadamard.pt` — LSTM fitness predictor (500 samples, CUDA)
@@ -91,6 +143,7 @@ CSV library built by `evolve.py`.  Each file is comma‑separated ±1 values.
 - Python 3.10+ with NumPy
 - PyTorch (for RNN models)
 - SageMath 10.0+ (for orders above 2000)
+- fastapi + uvicorn + httpx (for the webapp)
 - CUDA‑capable GPU (optional, for model training)
 
 ## Key Results

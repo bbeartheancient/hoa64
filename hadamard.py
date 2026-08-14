@@ -448,6 +448,7 @@ def local_search(
     min_gain: int = 4,
     report_every: int = 500,
     callback=None,
+    stop_flag=None,
 ) -> tuple[np.ndarray, dict]:
     n = int(H.shape[0])
     Hm = np.array(H, dtype=np.int8)
@@ -467,8 +468,11 @@ def local_search(
         j = 1 + idx % (n - 1)
         Hm, HT, G, M = _apply_flip(Hm, HT, G, M, i, j, n)
         flips += 1
-        if callback and flips % report_every == 0:
-            callback(make_stats(Hm))
+        if flips % report_every == 0:
+            if callback:
+                callback(make_stats(Hm))
+            if stop_flag is not None and stop_flag.is_set():
+                break
     st = make_stats(Hm)
     st["flips"] = flips
     st["elapsed_s"] = time.monotonic() - t0
@@ -508,6 +512,8 @@ def ils_search(
     frac: float = 0.05,
     seed_int: int | None = None,
     print_progress: bool = True,
+    iter_callback=None,
+    stop_flag=None,
 ) -> tuple[np.ndarray, dict]:
     rng = np.random.default_rng(seed_int)
     if seeds is None:
@@ -517,6 +523,8 @@ def ils_search(
     it = 0
     t0 = time.monotonic()
     while it < outer_iters:
+        if stop_flag is not None and stop_flag.is_set():
+            break
         if time_budget is not None and time.monotonic() - t0 > time_budget:
             break
         if best is not None and it > 0:
@@ -535,12 +543,22 @@ def ils_search(
             max_flips=inner_flips,
             report_every=max(1, inner_flips // 10),
             callback=_cb if print_progress else None,
+            stop_flag=stop_flag,
         )
         if print_progress:
             print(f"[iter {it}] f={st['f']} maxoff={st['max_off']} flips={st['flips']}")
         if best is None or st["f"] < bestf:
             best = H
             bestf = st["f"]
+        if iter_callback is not None:
+            iter_callback(
+                {
+                    "iter": it,
+                    "best_f": bestf,
+                    "det_log10": det_log10(best),
+                    "is_hadamard": bool(bestf == 0),
+                }
+            )
         it += 1
     bestst = make_stats(best)
     bestst.update(

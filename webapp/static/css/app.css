@@ -1,0 +1,499 @@
+/* hoa64 webapp — retro-HUD "ghost terminal" theme (Phase 4.5).
+ * Monochrome line-art HUD re-tinted by css/themes.css custom properties.
+ * No gradients (except dotted-grid/scanline textures), no radius, no shadows.
+ * All class names from Phases 1–4 are preserved. */
+
+:root {
+  --mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas,
+    "Liberation Mono", monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  counter-reset: panel;
+  margin: 0;
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.45;
+  background:
+    radial-gradient(var(--faint) 1px, transparent 1px) 0 0 / 24px 24px,
+    var(--bg);
+  text-shadow: 0 0 6px var(--glow-eff, var(--glow));
+}
+
+::selection { background: var(--fg); color: var(--bg); }
+
+/* #app wraps the whole UI so display settings apply as ONE global CSS filter
+ * (brightness/contrast/saturate/invert) — filter creates a containing block
+ * for fixed descendants, which is why .crt-fx and #settings-panel live
+ * inside it. */
+#app { position: relative; min-height: 100vh; }
+
+/* thin theme-colored scrollbars */
+* { scrollbar-width: thin; scrollbar-color: var(--dim) transparent; }
+*::-webkit-scrollbar { width: 6px; height: 6px; }
+*::-webkit-scrollbar-thumb { background: var(--dim); }
+*::-webkit-scrollbar-track { background: transparent; }
+
+/* ---- top bar ------------------------------------------------------------ */
+.topbar {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--panel-line);
+}
+.topbar .logo { color: var(--fg); font-weight: bold; font-size: 15px; letter-spacing: 0.12em; }
+.topbar .logo::before { content: "» "; color: var(--accent); }
+.topbar .subtitle { color: var(--dim); text-transform: uppercase; font-size: 10px; letter-spacing: 0.2em; }
+.topbar .spacer { flex: 1; }
+.hud-accent {
+  color: var(--dim);
+  font-size: 10px;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* theme switcher: [MONO][P1][AMB][PLS][DMG][VGA] */
+.theme-switch { display: flex; gap: 4px; }
+.ts-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--dim);
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  padding: 2px 4px;
+  cursor: pointer;
+}
+.ts-btn:hover { color: var(--fg); }
+.ts-btn.active { color: var(--bg); background: var(--fg); }
+
+/* ---- tabs ---------------------------------------------------------------- */
+.tabs {
+  display: flex;
+  gap: 2px;
+  padding: 6px 16px 0;
+  border-bottom: 1px solid var(--panel-line);
+}
+.tab {
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  color: var(--dim);
+  font: inherit;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+.tab:hover:not(:disabled) { color: var(--fg); }
+.tab.active {
+  border-color: var(--panel-line);
+  color: var(--bg);
+  background: var(--fg);
+  text-shadow: none;
+}
+.tab:disabled { opacity: 0.35; cursor: default; }
+
+/* ---- layout -------------------------------------------------------------- */
+#tab-content { padding: 14px 16px; }
+.lab {
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  gap: 14px;
+  align-items: start;
+}
+
+/* ---- panels: line-art box + corner brackets + micro-label header -------- */
+.panel {
+  position: relative;
+  background: transparent;
+  border: 1px solid var(--panel-line);
+  padding: 12px;
+  margin-bottom: 12px;
+}
+.panel::before,
+.panel::after {
+  content: "";
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border: 0 solid var(--fg);
+}
+.panel::before { top: -1px; left: -1px; border-top-width: 1px; border-left-width: 1px; }
+.panel::after { bottom: -1px; right: -1px; border-bottom-width: 1px; border-right-width: 1px; }
+.panel h2 {
+  margin: 0 0 10px;
+  padding-bottom: 6px;
+  font-size: 10px;
+  font-weight: normal;
+  color: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: 0.22em;
+  border-bottom: 1px solid var(--panel-line);
+}
+.panel h2::before { content: "▸ "; color: var(--fg); }
+.panel h2::after {
+  content: " // FD_" counter(panel, decimal-leading-zero);
+  counter-increment: panel;
+  color: var(--faint);
+  float: right;
+}
+
+/* ---- forms ---------------------------------------------------------------- */
+.row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.row label {
+  width: 64px;
+  flex: none;
+  color: var(--dim);
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+}
+.row input, .row select {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: 1px solid var(--panel-line);
+  border-radius: 0;
+  color: var(--fg);
+  font: inherit;
+  padding: 4px 8px;
+}
+.row select option { background: var(--bg); color: var(--fg); }
+.row input:focus, .row select:focus { outline: 1px solid var(--fg); }
+
+/* Bug 3: native number-input spinners are black-on-white regardless of
+ * theme. `color-scheme` is the robust fix — the browser renders its
+ * native widgets (spin buttons, checkboxes, scrollbars) for a dark or
+ * light chrome to match the theme. Dark LCD themes (dmg/cgb light
+ * variants) get light scheme; everything else dark. */
+[data-theme] { color-scheme: dark; }
+[data-theme="dmg"], [data-theme="cgb"] { color-scheme: light; }
+[data-theme="cgb"][data-variant="dark"] { color-scheme: dark; }
+input[type="number"]::-webkit-inner-spin-button { opacity: 0.85; cursor: pointer; }
+
+/* ---- buttons: invert on hover/active -------------------------------------- */
+button.btn, a.btn {
+  display: inline-block;
+  background: transparent;
+  border: 1px solid var(--fg);
+  border-radius: 0;
+  color: var(--fg);
+  font: inherit;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  padding: 5px 12px;
+  cursor: pointer;
+  text-decoration: none;
+}
+button.btn::before { content: "[ "; }
+button.btn::after { content: " ]"; }
+a.btn::before { content: "[ "; }
+a.btn::after { content: " ]"; }
+button.btn:hover, a.btn:hover { background: var(--fg); color: var(--bg); text-shadow: none; }
+button.btn:disabled { opacity: 0.35; cursor: default; background: transparent; color: var(--fg); }
+.btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.btn-xs { padding: 0 5px; }
+.btn-xs::before, .btn-xs::after { content: ""; }
+
+/* ---- matrix canvas / wraps ------------------------------------------------ */
+.canvas-wrap {
+  position: relative; /* single-viewport transmute: .sp-overlay anchors here */
+  border: 1px solid var(--panel-line);
+  padding: 12px;
+  text-align: center;
+}
+#matrix-canvas { transition: opacity 0.9s; } /* 2D↔3D morph crossfade */
+.canvas-wrap .sp-overlay {
+  position: absolute;
+  inset: 12px; /* aligns with .canvas-wrap padding → covers the 2D canvas */
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+}
+canvas#matrix-canvas {
+  width: 512px;
+  height: 512px;
+  max-width: 100%;
+  image-rendering: pixelated;
+  background: var(--bg);
+  border: 1px solid var(--panel-line);
+}
+
+/* ---- stats table ----------------------------------------------------------- */
+table.stats { width: 100%; border-collapse: collapse; }
+table.stats td, table.stats th {
+  padding: 3px 4px;
+  border-bottom: 1px solid var(--panel-line);
+  text-align: left;
+}
+table.stats th { color: var(--dim); font-weight: normal; font-size: 10px; text-transform: uppercase; }
+table.stats td.k { color: var(--dim); }
+table.stats td.v { text-align: right; color: var(--fg); }
+.good { color: var(--fg); }
+.bad { color: var(--accent); }
+
+.msg { margin-top: 8px; min-height: 1em; white-space: pre-wrap; color: var(--dim); }
+.msg.error { color: var(--accent); }
+.msg.ok { color: var(--fg); }
+
+/* ---- search studio / shared ------------------------------------------------ */
+.hidden { display: none; }
+.status-line { color: var(--dim); margin-bottom: 8px; min-height: 1em; font-size: 11px; }
+/* Item 3: Search Studio unified run panel — matrix left, charts right */
+.run-viz { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; }
+.run-viz .canvas-wrap { flex: 1 1 420px; }
+.run-viz .run-charts { flex: 1 1 420px; min-width: 280px; }
+canvas.chart {
+  display: block;
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--panel-line);
+  image-rendering: pixelated;
+}
+.slider-row input[type="range"] {
+  flex: 1;
+  accent-color: var(--fg);
+  padding: 0;
+}
+.slider-row .slider-val {
+  width: 70px;
+  text-align: right;
+  color: var(--fg);
+  flex: none;
+}
+
+/* ---- micromag sim three-panel view ------------------------------------------ */
+.panel-row { display: flex; gap: 12px; flex-wrap: wrap; }
+.layer-select { margin: 4px 0 10px; } /* Item 4/5: visualizer layer pickers */
+.sim-cell { flex: 1; min-width: 160px; text-align: center; position: relative; }
+.sim-cell .sim-label {
+  color: var(--dim);
+  margin-bottom: 6px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+}
+canvas.sim-canvas {
+  width: 100%;
+  aspect-ratio: 1;
+  image-rendering: pixelated;
+  background: var(--bg);
+  border: 1px solid var(--panel-line);
+}
+.sim-fx {
+  position: absolute;
+  inset: 22px 0 auto 0; /* below the label */
+  aspect-ratio: 1;
+  width: 100%;
+  z-index: -1;
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+/* ---- hoa studio -------------------------------------------------------------- */
+table.positions input {
+  width: 84px;
+  background: transparent;
+  border: 1px solid var(--panel-line);
+  border-radius: 0;
+  color: var(--fg);
+  font: inherit;
+  padding: 3px 6px;
+}
+.src-row input { width: 64px; flex: none; }
+.src-row select { width: 72px; flex: none; }
+/* Bug 4: HOA Studio — sphere + scene panel side by side, both flexing */
+.hoa-row { align-items: flex-start; }
+.hoa-row .three-wrap { flex: 1 1 480px; min-width: 320px; }
+.hoa-row .scene-panel { flex: 1 1 380px; min-width: 300px; }
+.hoa-row .scene-panel .row { flex-wrap: wrap; }
+.heat-canvas { margin-top: 8px; }
+.three-wrap { text-align: center; }
+.three-wrap canvas { border: 1px solid var(--panel-line); }
+/* Item 3: terrain 3D viewport + layer view are equal-width 1:1 panels */
+.ter-views > .panel { flex: 1 1 0; min-width: 300px; }
+.ter-views canvas { width: 100%; aspect-ratio: 1; }
+.three-wrap .fx-toggle {
+  margin-top: 8px;
+  color: var(--dim);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  cursor: pointer;
+}
+.power-img {
+  width: 100%;
+  margin-top: 8px;
+  image-rendering: pixelated;
+  border: 1px solid var(--panel-line);
+}
+
+/* ---- CRT overlay: pure CSS, zero frame cost --------------------------------- */
+.crt-fx {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  background:
+    repeating-linear-gradient(
+      0deg,
+      transparent 0,
+      transparent 2px,
+      rgba(0, 0, 0, 0.55) 2px,
+      rgba(0, 0, 0, 0.55) 3px
+    ),
+    radial-gradient(ellipse at center, transparent 55%, rgba(0, 0, 0, 0.5) 100%);
+  opacity: 0.08;
+}
+[data-theme="green"] .crt-fx,
+[data-theme="amber"] .crt-fx { opacity: 0.15; }
+[data-theme="plasma"] .crt-fx { opacity: 0.2; }
+[data-theme="vga"] .crt-fx { display: none; }
+[data-theme="dmg"] .crt-fx {
+  /* LCD: no scanlines — 2px pixel grid + light haze instead */
+  background:
+    repeating-linear-gradient(0deg, transparent 0, transparent 1px, rgba(26, 48, 18, 0.25) 1px, rgba(26, 48, 18, 0.25) 2px),
+    repeating-linear-gradient(90deg, transparent 0, transparent 1px, rgba(26, 48, 18, 0.25) 1px, rgba(26, 48, 18, 0.25) 2px);
+  opacity: 0.5;
+}
+[data-theme="cgb"] .crt-fx {
+  /* same LCD grid, tinted toward the CGB purple-black ink */
+  background:
+    repeating-linear-gradient(0deg, transparent 0, transparent 1px, rgba(48, 40, 56, 0.22) 1px, rgba(48, 40, 56, 0.22) 2px),
+    repeating-linear-gradient(90deg, transparent 0, transparent 1px, rgba(48, 40, 56, 0.22) 1px, rgba(48, 40, 56, 0.22) 2px);
+  opacity: 0.5;
+}
+
+/* ---- settings panel (Feature 7): slide-in display/processing drawer ------ */
+#settings-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 300px;
+  box-sizing: border-box;
+  padding: 14px 16px;
+  overflow-y: auto;
+  background: var(--bg);
+  border-left: 1px solid var(--panel-line);
+  color: var(--fg);
+  transform: translateX(100%);
+  transition: transform 0.2s ease;
+  z-index: 10000; /* above .crt-fx so the panel itself stays unfiltered */
+}
+#settings-panel.open { transform: translateX(0); }
+#settings-panel .set-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+#settings-panel .set-title {
+  margin: 0;
+  font-size: 1em;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+#settings-panel .set-section {
+  border-top: 1px solid var(--panel-line);
+  padding: 10px 0;
+}
+#settings-panel .set-section h3 {
+  margin: 0 0 8px;
+  font-size: 0.85em;
+  font-weight: normal;
+  color: var(--dim);
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+}
+#settings-panel .set-themes { display: flex; flex-wrap: wrap; gap: 4px; }
+#settings-panel .set-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+  font-size: 0.9em;
+}
+#settings-panel .set-row > span:first-child { flex: 0 0 6.5em; color: var(--dim); }
+#settings-panel .set-row input[type="range"] { flex: 1; min-width: 0; }
+#settings-panel .set-row select {
+  flex: 1;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--panel-line);
+  font: inherit;
+}
+#settings-panel .set-val {
+  min-width: 3em;
+  text-align: right;
+  color: var(--fg);
+}
+
+/* ---- themed form controls (controls.js) ------------------------------------
+ * Native number spinners / file browse buttons ignore the theme — replaced
+ * by HUD widgets. Icons are /assets/icons SVGs applied as masks tinted by
+ * currentColor, so they always match the theme fg. */
+input[type="number"] { appearance: textfield; -moz-appearance: textfield; }
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  display: none;
+  -webkit-appearance: none;
+  margin: 0;
+}
+.num-wrap { display: inline-flex; align-items: stretch; gap: 2px; }
+.num-btn {
+  background: transparent;
+  color: var(--fg);
+  border: 1px solid var(--panel-line);
+  cursor: pointer;
+  padding: 0 4px;
+  display: inline-flex;
+  align-items: center;
+  font: inherit;
+}
+.num-btn:hover { background: var(--faint); }
+.ctl-ico {
+  display: block;
+  width: 10px;
+  height: 10px;
+  background: currentColor;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+.ico-up {
+  -webkit-mask-image: url("/assets/icons/arrow-up.svg");
+  mask-image: url("/assets/icons/arrow-up.svg");
+}
+.ico-down {
+  -webkit-mask-image: url("/assets/icons/arrow-down.svg");
+  mask-image: url("/assets/icons/arrow-down.svg");
+}
+.ico-browse {
+  width: 12px;
+  height: 12px;
+  -webkit-mask-image: url("/assets/icons/browse.svg");
+  mask-image: url("/assets/icons/browse.svg");
+}
+.file-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+.file-btn { display: inline-flex; align-items: center; gap: 6px; }

@@ -29,8 +29,16 @@ def psd_objective(a):
     return float(np.sum((pw - target) ** 2))
 
 
-def psd_search(n, max_flips=100000, tol=1.0, rng=None, start_seq=None):
-    """Single-flip greedy PSD descent for a single sequence of length n=m^2."""
+def psd_search(n, max_flips=100000, tol=1.0, rng=None, start_seq=None,
+               callback=None, stop_flag=None, report_every=500):
+    """Single-flip greedy PSD descent for a single sequence of length n=m^2.
+
+    Optional streaming hooks (zero behavior change when omitted):
+    callback(dict) is called every report_every flips with
+    {"step", "f", "best_f", "H"} (H = current best matrix, for live
+    previews; never serialized); stop_flag (threading.Event) breaks the
+    descent early when set, returning the current best.
+    """
     rng = rng or np.random.default_rng()
     m = int(math.isqrt(n))
     n_plus = (n + m) // 2
@@ -64,15 +72,21 @@ def psd_search(n, max_flips=100000, tol=1.0, rng=None, start_seq=None):
         pw[:] = pw_new; f_cur = fn; flips += 1
         if fn < best_f:
             best_f = fn; best_a = a.copy()
+        if callback is not None and flips % report_every == 0:
+            callback({"step": flips, "f": f_cur, "best_f": best_f,
+                      "H": circulant_matrix(np.round(best_a).astype(np.int8))})
+        if stop_flag is not None and stop_flag.is_set():
+            break
     return best_a, best_f, flips, time.monotonic() - t0
 
 
 def search_ils(n, inner_flips=20000, outer_iters=30, time_budget=None,
-               rng=None, frac=0.05):
+               rng=None, frac=0.05, stop_flag=None):
     rng = rng or np.random.default_rng()
     m = int(math.isqrt(n)); n_plus = (n + m) // 2
     best_a = None; best_f = None; it = 0; t0 = time.monotonic()
     while it < outer_iters:
+        if stop_flag is not None and stop_flag.is_set(): break
         if time_budget and time.monotonic() - t0 > time_budget: break
         if best_a is not None and it > 0:
             a = np.round(best_a).astype(np.float64)
@@ -86,10 +100,12 @@ def search_ils(n, inner_flips=20000, outer_iters=30, time_budget=None,
             pos = rng.choice(n, size=n_plus, replace=False)
             a[pos] = 1.0
         a_res, f, flips, _ = psd_search(n, max_flips=inner_flips, tol=0.0,
-                                          start_seq=a)
+                                          start_seq=a, stop_flag=stop_flag)
         if best_a is None or f < best_f:
             best_a = a_res.copy(); best_f = f
         it += 1
+    if best_a is None:  # cancelled before the first descent finished
+        return None, None, False
     H = circulant_matrix(np.round(best_a).astype(np.int8))
     return H, best_f, verify(H)
 

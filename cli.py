@@ -104,6 +104,13 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_webapp(args: argparse.Namespace) -> int:
+    from .webapp.app import main as webapp_main
+
+    webapp_main(host=args.host, port=args.port)
+    return 0
+
+
 def _cmd_detect(args: argparse.Namespace) -> int:
     import json
     from .detector import (
@@ -450,6 +457,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--port", type=int, default=8765)
     s.set_defaults(func=_cmd_serve)
+
+    w = sub.add_parser("webapp", help="Web GUI (FastAPI, default :8770)")
+    w.add_argument("--host", default="127.0.0.1")
+    w.add_argument("--port", type=int, default=8770)
+    w.set_defaults(func=_cmd_webapp)
 
     det = sub.add_parser("detect", help="Image/YOLO/JSON → vision spatial report")
     det.add_argument("--image", help="Image path (optional torchvision detector)")
