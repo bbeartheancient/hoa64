@@ -64,6 +64,7 @@ def design(req: DesignReq) -> dict:
         "stats": d["stats"],
         "tiles": d["tiles"],
         "preview": d["preview"],
+        "key": d.get("key"),
     })
 
 
@@ -94,6 +95,7 @@ def kicad(req: DesignReq) -> dict:
         "preview": d["preview"],
         "stats": d["stats"],
         "tiles": d["tiles"],
+        "key": d.get("key"),
     })
 
 

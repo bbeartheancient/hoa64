@@ -4,27 +4,30 @@ Three homes for the 4-tile Walsh wall pattern of Sylvester / A ⊗ H₈
 (see `micromag.flux_tiles`).  The catalog is not a named object in the
 Hadamard literature; these are concrete layouts that *use* it.
 
-The working field is the **flux polarity**, not the Hadamard signs:
+Two fields, because the stack is **two copper layers**:
 
-    P = 2W − 1 ∈ {−1, 0, +1}
+    H ∈ {+1, −1}     layer assignment (face / reverse)
+    W ∈ {0, ½, 1}    flux tile (bulk / edge / vertex)
+    P = 2W − 1       ternary colour of the tile, *not* a 3rd net
 
-W = 0 (aligned, no wall) → P = −1, W = ½ (one wall) → P = 0,
-W = 1 (corner, two walls) → P = +1.  That is the ternary tile
-visible on the Micromag FLUX layer.
+P = 0 (W = ½) is a dielectric gap, not a conductor.  Putting it on a
+third yarn is not fabricable on 2-layer cloth or 2-layer PCB, and
+the W = 0 cells are almost all isolated pixels if used as a net.
+Copper therefore follows H (two continuous face/reverse electrodes);
+the flux tile is the *map* — fill colour and a smaller pad on edge
+cells — so the preview matches ``fluxtile.png`` while the gerber
+stays two-layer.
 
-**Cloth / knit** (`cloth`).  Three yarn nets on an open sheet (no
-toroidal wrap).  P = +1 is face conductor (F.Cu), P = −1 is reverse
-(B.Cu), P = 0 is the mid / ground yarn.  A run breaks where P
-changes.  Connected components of each polarity are electrodes.
+**Cloth.**  Warp/weft runs follow H; a run breaks where H changes
+(the domain wall).  Face = H=+1 (F.Cu), reverse = H=−1 (B.Cu).
 
-**Capacitive touchpad** (`touchpad`).  Same ternary copper.  Every
-bond between unlike P is a mutual-cap.  Three electrode families
-(+/0/−); the H.8 tile is one balanced sensor cell.
+**Touchpad.**  Electrodes are the 4-connected components of each H
+sign.  Each H-changing bond is a mutual-cap; W at the two cells
+says whether that gap is a straight wall (½) or a corner (1).
 
-**Metamaterial / spin-ice** (`metamaterial`).  The full n×n flux
-sheet (so the preview *is* the tile, not H) plus a callout of the
-H.8 atom and the Walsh lattice of the four tiles.  P = +1 vertices,
-P = 0 edges, P = −1 bulk.
+**Metamaterial.**  Same 2-layer copper; the flux sheet is the
+patterned dielectric / via map (vertices W=1, edges W=½, bulk W=0)
+plus the Walsh lattice of the four H.8 atoms.
 
 Pitch is millimetres per matrix cell.  Layouts use the same
 ``{rects, pads, vias, bbox}`` schema as `kicad_gen.footprint_from_layout`.
@@ -71,12 +74,37 @@ def flux_polarity(H) -> np.ndarray:
                     np.where(W >= 0.25, np.int8(0), np.int8(-1)))
 
 
+def _layer_of_H(h: int) -> str:
+    """2-layer stack: H=+1 face (F.Cu), H=−1 reverse (B.Cu)."""
+    return "F.Cu" if int(h) > 0 else "B.Cu"
+
+
 def _layer_of(p: int) -> str:
+    """Legacy name — flux polarity is a *colour*, not a copper layer."""
     if p > 0:
         return "F.Cu"
     if p < 0:
         return "B.Cu"
     return "F.SilkS"
+
+
+MAP_KEY = {
+    "stack": "2-layer: copper follows H (±1); fill colour is flux P=2W−1",
+    "fill": [
+        {"polarity": 1, "w": 1.0, "swatch": "fg",
+         "name": "+", "means": "vertex — two walls (W=1)"},
+        {"polarity": 0, "w": 0.5, "swatch": "dim",
+         "name": "0", "means": "edge — one wall (W=½); dielectric gap, not a 3rd net"},
+        {"polarity": -1, "w": 0.0, "swatch": "accent",
+         "name": "−", "means": "bulk — no wall (W=0)"},
+    ],
+    "copper": [
+        {"layer": "F.Cu", "h": 1, "name": "face",
+         "means": "H=+1 top / face yarn"},
+        {"layer": "B.Cu", "h": -1, "name": "reverse",
+         "means": "H=−1 bottom / reverse yarn"},
+    ],
+}
 
 
 # --- connected components (open sheet, no wrap) ------------------------------
@@ -155,21 +183,28 @@ def preview_from_layout(layout: dict) -> dict:
     return {"prims": prims, "bbox": layout["bbox"]}
 
 
-def _sheet(P: np.ndarray, pitch: float, gap_frac: float):
-    """n×n ternary cells → rects.  P ∈ {−1, 0, +1}."""
-    n = P.shape[0]
+def _sheet(H: np.ndarray, P: np.ndarray, pitch: float, gap_frac: float):
+    """n×n cells: copper layer from H, fill polarity from flux P.
+
+    Edge cells (P=0, W=½) keep the H copper layer but shrink so the
+    dielectric street of the flux tile is visible on a 2-layer gerber.
+    """
+    n = H.shape[0]
     cell = pitch * (1.0 - float(gap_frac))
     origin = -0.5 * (n - 1) * pitch
     rects = []
     for i in range(n):
         for j in range(n):
             p = int(P[i, j])
+            h = int(H[i, j])
+            sz = cell * (0.45 if p == 0 else 1.0)
             rects.append({
                 "x": origin + j * pitch,
                 "y": origin + (n - 1 - i) * pitch,
-                "w": cell, "h": cell,
-                "layer": _layer_of(p),
+                "w": sz, "h": sz,
+                "layer": _layer_of_H(h),
                 "polarity": p,
+                "h_sign": h,
             })
     return rects, origin, cell
 
@@ -198,17 +233,19 @@ def _polarity_stats(P: np.ndarray) -> dict:
 
 
 def cloth(H, pitch_mm: float = 1.0, gap_frac: float = 0.18) -> dict:
-    """Ternary cloth from flux polarity P = 2W−1, not from H."""
+    """2-layer cloth: copper from H, flux tile as the visible map."""
+    H = np.asarray(H, dtype=np.int8)
     P = flux_polarity(H)
-    n = P.shape[0]
+    n = H.shape[0]
     pitch = float(pitch_mm)
-    rects, origin, cell = _sheet(P, pitch, gap_frac)
+    rects, origin, cell = _sheet(H, P, pitch, gap_frac)
+    face_lab, n_face = _components(H == 1)
+    rev_lab, n_rev = _components(H == -1)
     st = _polarity_stats(P)
     pads = []
     for name, mask, layer in (
-        ("+", P[:, 0] == 1, "F.Cu"),
-        ("0", P[:, 0] == 0, "F.SilkS"),
-        ("-", P[:, 0] == -1, "B.Cu"),
+        ("F", H[:, 0] == 1, "F.Cu"),
+        ("B", H[:, 0] == -1, "B.Cu"),
     ):
         hits = np.argwhere(mask)
         if len(hits):
@@ -220,14 +257,20 @@ def cloth(H, pitch_mm: float = 1.0, gap_frac: float = 0.18) -> dict:
               "bbox": _bbox_of(rects, pads), "kind": "cloth"}
     stats = {
         "kind": "cloth", "n": n, "pitch_mm": pitch,
-        "n_plus": st["n_plus"], "n_zero": st["n_zero"], "n_minus": st["n_minus"],
-        "sites_plus": st["sites_plus"], "sites_zero": st["sites_zero"],
+        "n_face": int(n_face), "n_reverse": int(n_rev),
+        "sites_face": int(np.sum(H == 1)),
+        "sites_reverse": int(np.sum(H == -1)),
+        "sites_plus": st["sites_plus"],
+        "sites_zero": st["sites_zero"],
         "sites_minus": st["sites_minus"],
-        "warp_runs": st["warp_runs"], "weft_runs": st["weft_runs"],
-        "unlike_bonds": st["unlike_bonds"],
+        "warp_runs": sum(len(_runs(H[:, j])) for j in range(n)),
+        "weft_runs": sum(len(_runs(H[i])) for i in range(n)),
+        "wall_bonds": int(np.sum(H[:, :-1] != H[:, 1:]))
+                      + int(np.sum(H[:-1, :] != H[1:, :])),
         "mean_w": float(flux_map(H).mean()),
         "fill": 1.0 - gap_frac,
-        "field": "flux P=2W-1",
+        "field": "copper=H  fill=flux P=2W-1  0=gap",
+        "stack": "2-layer",
     }
     return {"layout": layout, "stats": stats, "preview": preview_from_layout(layout)}
 
@@ -236,35 +279,37 @@ def cloth(H, pitch_mm: float = 1.0, gap_frac: float = 0.18) -> dict:
 
 
 def touchpad(H, pitch_mm: float = 2.0, gap_frac: float = 0.2) -> dict:
-    """Mutual-cap pad on the ternary flux field.  Unlike-P bonds are caps."""
+    """2-layer mutual-cap pad: electrodes from H, walls from flux."""
+    H = np.asarray(H, dtype=np.int8)
     P = flux_polarity(H)
-    n = P.shape[0]
+    n = H.shape[0]
     pitch = float(pitch_mm)
-    rects, origin, cell = _sheet(P, pitch, gap_frac)
+    rects, origin, cell = _sheet(H, P, pitch, gap_frac)
+    face_lab, n_face = _components(H == 1)
+    rev_lab, n_rev = _components(H == -1)
     st = _polarity_stats(P)
-    labs = {1: st["plus_lab"], 0: st["zero_lab"], -1: st["minus_lab"]}
+    W = flux_map(H)
     caps = []
     for i in range(n):
         for j in range(n - 1):
-            if P[i, j] == P[i, j + 1]:
+            if H[i, j] == H[i, j + 1]:
                 continue
-            caps.append({"a": int(P[i, j]), "b": int(P[i, j + 1]),
-                         "ia": int(labs[int(P[i, j])][i, j]),
-                         "ib": int(labs[int(P[i, j + 1])][i, j + 1]),
-                         "dir": "h"})
+            a, b = (int(face_lab[i, j]), int(rev_lab[i, j + 1])) if H[i, j] == 1 \
+                else (int(face_lab[i, j + 1]), int(rev_lab[i, j]))
+            caps.append({"face": a, "reverse": b, "dir": "h",
+                         "w": [float(W[i, j]), float(W[i, j + 1])]})
     for i in range(n - 1):
         for j in range(n):
-            if P[i, j] == P[i + 1, j]:
+            if H[i, j] == H[i + 1, j]:
                 continue
-            caps.append({"a": int(P[i, j]), "b": int(P[i + 1, j]),
-                         "ia": int(labs[int(P[i, j])][i, j]),
-                         "ib": int(labs[int(P[i + 1, j])][i + 1, j]),
-                         "dir": "v"})
+            a, b = (int(face_lab[i, j]), int(rev_lab[i + 1, j])) if H[i, j] == 1 \
+                else (int(face_lab[i + 1, j]), int(rev_lab[i, j]))
+            caps.append({"face": a, "reverse": b, "dir": "v",
+                         "w": [float(W[i, j]), float(W[i + 1, j])]})
     pads = []
-    for pval, lab, n_el, prefix in (
-        (1, st["plus_lab"], st["n_plus"], "P"),
-        (0, st["zero_lab"], st["n_zero"], "Z"),
-        (-1, st["minus_lab"], st["n_minus"], "M"),
+    for lab, n_el, prefix, layer in (
+        (face_lab, n_face, "F", "F.Cu"),
+        (rev_lab, n_rev, "B", "B.Cu"),
     ):
         for eid in range(n_el):
             cells = np.argwhere(lab == eid)
@@ -273,22 +318,22 @@ def touchpad(H, pitch_mm: float = 2.0, gap_frac: float = 0.2) -> dict:
                 "name": f"{prefix}{eid}",
                 "x": origin + float(cx) * pitch,
                 "y": origin + (n - 1 - float(cy)) * pitch,
-                "w": cell * 0.6, "h": cell * 0.6,
-                "layer": _layer_of(pval),
+                "w": cell * 0.55, "h": cell * 0.55, "layer": layer,
             })
     layout = {"rects": rects, "pads": pads, "vias": [],
               "bbox": _bbox_of(rects, pads), "kind": "touchpad"}
-    n_el = st["n_plus"] + st["n_zero"] + st["n_minus"]
     stats = {
         "kind": "touchpad", "n": n, "pitch_mm": pitch,
-        "n_electrodes": n_el,
-        "n_plus": st["n_plus"], "n_zero": st["n_zero"], "n_minus": st["n_minus"],
-        "sites_plus": st["sites_plus"], "sites_zero": st["sites_zero"],
+        "n_electrodes": int(n_face + n_rev),
+        "n_face": int(n_face), "n_reverse": int(n_rev),
+        "sites_plus": st["sites_plus"],
+        "sites_zero": st["sites_zero"],
         "sites_minus": st["sites_minus"],
         "n_caps": len(caps),
         "caps_per_cell": len(caps) / max(n * n, 1),
         "mean_w": float(flux_map(H).mean()),
-        "field": "flux P=2W-1",
+        "field": "copper=H  fill=flux P=2W-1  0=gap",
+        "stack": "2-layer",
     }
     return {"layout": layout, "stats": stats,
             "preview": preview_from_layout(layout),
@@ -315,8 +360,8 @@ def metamaterial(H, pitch_mm: float = 2.0, gap_frac: float = 0.2) -> dict:
             if key not in catalog:
                 catalog[key] = {"id": len(catalog), "W": block.copy()}
             grid[bi, bj] = catalog[key]["id"]
-    # main view: the whole flux sheet (this IS the tile, not H)
-    rects, origin, cell = _sheet(P, pitch, gap_frac)
+    # main view: flux-coloured sheet on 2-layer H copper
+    rects, origin, cell = _sheet(H, P, pitch, gap_frac)
     st = _polarity_stats(P)
     pads = [{"name": "UC", "x": origin, "y": origin + (n - 1) * pitch,
              "w": cell * 0.4, "h": cell * 0.4, "layer": "F.Cu"}]
@@ -353,7 +398,8 @@ def metamaterial(H, pitch_mm: float = 2.0, gap_frac: float = 0.2) -> dict:
         "n_bulk": st["sites_minus"],
         "mean_w": float(W.mean()),
         "nested": tiles.get("nested"),
-        "field": "flux P=2W-1",
+        "field": "copper=H  fill=flux P=2W-1  0=gap",
+        "stack": "2-layer",
     }
     return {"layout": layout, "stats": stats,
             "preview": preview_from_layout(layout),
@@ -375,6 +421,7 @@ def design(kind: str, order: int, start: str = "sylvester",
     out["order"] = int(order)
     out["start"] = start
     out["tiles"] = flux_tiles(H)
+    out["key"] = MAP_KEY
     return out
 
 
@@ -389,19 +436,19 @@ if __name__ == "__main__":
     assert not np.array_equal(P, H8) and not np.array_equal(P, -H8)
     c = cloth(H8, pitch_mm=1.0)
     assert c["stats"]["sites_zero"] > 0
-    assert c["stats"]["field"] == "flux P=2W-1"
+    assert "2-layer" in c["stats"]["stack"]
+    assert c["stats"]["n_face"] >= 1 and c["stats"]["n_reverse"] >= 1
     assert c["preview"]["prims"]
     assert c["stats"]["warp_runs"] > 8
-    print(f"PASS  cloth H8 flux: +{c['stats']['sites_plus']} "
-          f"0={c['stats']['sites_zero']} −{c['stats']['sites_minus']} "
-          f"runs={c['stats']['warp_runs']}")
+    print(f"PASS  cloth H8 2-layer: face={c['stats']['n_face']} "
+          f"rev={c['stats']['n_reverse']}  flux +/0/− "
+          f"{c['stats']['sites_plus']}/{c['stats']['sites_zero']}/{c['stats']['sites_minus']}")
 
     t = touchpad(H8, pitch_mm=2.0)
     assert t["stats"]["n_caps"] > 0
-    assert t["stats"]["n_electrodes"] == (
-        t["stats"]["n_plus"] + t["stats"]["n_zero"] + t["stats"]["n_minus"])
-    print(f"PASS  touchpad H8: {t['stats']['n_electrodes']} electrodes "
-          f"(+/0/−), {t['stats']['n_caps']} caps")
+    assert t["stats"]["n_electrodes"] == t["stats"]["n_face"] + t["stats"]["n_reverse"]
+    print(f"PASS  touchpad H8: {t['stats']['n_electrodes']} 2-layer electrodes, "
+          f"{t['stats']['n_caps']} caps")
 
     m = metamaterial(sylvester(16), pitch_mm=2.0)
     assert m["stats"]["n_atoms"] == 4

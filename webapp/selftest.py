@@ -799,8 +799,9 @@ def selftest() -> int:
     expect(r.status_code == 200, f"materials cloth: {r.status_code} {r.text[:200]}")
     md = r.json()
     expect(md["stats"]["warp_runs"] > 0 and md["preview"]["prims"], "cloth empty")
-    expect(md["stats"].get("field") == "flux P=2W-1", "cloth not flux-polarity")
+    expect("2-layer" in (md["stats"].get("stack") or ""), "cloth not 2-layer")
     expect(md["stats"]["sites_zero"] > 0, "cloth missing 0-polarity sites")
+    expect(md.get("key") and md["key"]["fill"], "cloth missing map key")
     expect(md["tiles"]["kronecker_h8"], "cloth H16 not 4-tile")
     r = client.post("/api/materials/design", json={
         "kind": "touchpad", "order": 8, "start": "sylvester"})
