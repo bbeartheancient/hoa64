@@ -11,6 +11,15 @@ import { drawKicadPrims } from "/js/kicad_layers.js";
 
 const LAYERS = { design: "DESIGN", evolve: "EVOLVE", kicad: "KICAD" };
 
+// mirrors rf_filter.TOPOS / LUMPED_TOPOS (server also returns `topos`)
+const TOPOS = {
+  lpf: ["stepped", "lc", "qw_tl", "rc", "crc", "rl"],
+  hpf: ["stub", "lc", "rc", "rl"],
+  bpf: ["hairpin", "lc", "dc_lc", "qw_tl", "c_shunt"],
+  bsf: ["stub", "lc"],
+};
+const LUMPED = new Set(["lc", "rc", "crc", "rl", "dc_lc"]);
+
 let msgEl, layerBtns = {}, panels = {};
 let layer = "design";
 let lastPacked = null;          // last /design or /evolve result
@@ -77,6 +86,46 @@ function syncKindForm() {
   document.getElementById("flt-row-ripple")?.classList.toggle(
     "hidden", document.getElementById("flt-proto")?.value !== "chebyshev"
   );
+  // rebuild the topology select for the kind, preserving a valid choice
+  const topoSel = document.getElementById("flt-topo");
+  if (topoSel && k) {
+    const prev = topoSel.value;
+    topoSel.replaceChildren(...(TOPOS[k] || []).map((t) =>
+      el("option", { value: t }, t.toUpperCase())));
+    if ((TOPOS[k] || []).includes(prev)) topoSel.value = prev;
+  }
+  // SA evolves distributed sections only
+  const lumped = LUMPED.has(topoSel?.value);
+  const eb = document.getElementById("flt-e-run");
+  if (eb) {
+    eb.disabled = lumped;
+    eb.title = lumped ? "evolution supports distributed topologies only" : "";
+  }
+}
+
+function fmtEng(v, unit) {
+  const a = Math.abs(Number(v));
+  if (!a) return unit === "Ω" ? "0" : `0 ${unit}`;
+  let e = Math.floor(Math.log10(a) / 3) * 3;
+  e = Math.max(-12, Math.min(3, e));
+  const pre = { "-12": "p", "-9": "n", "-6": "µ", "-3": "m", 0: "", 3: "k" }[e];
+  const m = Number(v) / 10 ** e;
+  const ms = Number(m.toPrecision(4));
+  return unit === "Ω" ? `${ms}${pre}` : `${ms} ${pre}${unit}`;
+}
+
+function renderBom(comps) {
+  const host = document.getElementById("flt-d-bom");
+  if (!host) return;
+  if (!comps || !comps.length) {
+    host.replaceChildren(el("tr", {}, el("td", { class: "dim" }, "distributed topology — copper is the BOM")));
+    return;
+  }
+  host.replaceChildren(...comps.map((c) =>
+    el("tr", {},
+      el("td", { class: "k" }, c.ref),
+      el("td", { class: "v" }, fmtEng(c.value, c.unit)),
+      el("td", { class: "dim" }, c.role))));
 }
 
 function designBody() {
@@ -85,6 +134,7 @@ function designBody() {
     kind,
     proto: document.getElementById("flt-proto").value,
     n: parseInt(document.getElementById("flt-n").value, 10),
+    topo: document.getElementById("flt-topo")?.value || null,
     eps_r: numVal("flt-epsr", 4.4),
     h_mm: numVal("flt-h", 1.6),
     tan_delta: numVal("flt-tand", 0.02),
@@ -182,6 +232,7 @@ function drawPreview(preview) {
 function showPacked(d, metricsHost) {
   lastPacked = d;
   renderMetrics(metricsHost, d.metrics, d.params);
+  renderBom(d.components || (d.design && d.design.components));
   drawSweep();
   drawPreview(d.preview);
 }
@@ -324,6 +375,8 @@ export function init(container) {
           el("option", { value: "hpf" }, "HIGH-PASS (gap + stub)"),
           el("option", { value: "bpf" }, "BAND-PASS (hairpin)"),
           el("option", { value: "bsf" }, "BAND-STOP (open stub)"))),
+      el("div", { class: "row" }, el("label", {}, "topology"),
+        el("select", { id: "flt-topo" })),
       el("div", { class: "row" }, el("label", {}, "prototype"),
         el("select", { id: "flt-proto" },
           el("option", { value: "butterworth" }, "BUTTERWORTH"),
@@ -348,6 +401,11 @@ export function init(container) {
       el("h2", {}, "Metrics (everythingRF digest)"),
       el("table", { class: "stats" }, el("tbody", { id: "flt-d-metrics" },
         el("tr", {}, el("td", { class: "dim" }, "synthesize to fill IL / RL / Q_u"))))
+    ),
+    el("div", { class: "panel" },
+      el("h2", {}, "BOM (lumped)"),
+      el("table", { class: "stats" }, el("tbody", { id: "flt-d-bom" },
+        el("tr", {}, el("td", { class: "dim" }, "lumped topologies list ref / value / role"))))
     )
   );
 
@@ -408,6 +466,7 @@ export function init(container) {
   selectLayer("design");
 
   document.getElementById("flt-kind").addEventListener("change", syncKindForm);
+  document.getElementById("flt-topo").addEventListener("change", syncKindForm);
   document.getElementById("flt-proto").addEventListener("change", syncKindForm);
   document.getElementById("flt-d-run").addEventListener("click", doDesign);
   document.getElementById("flt-k-run").addEventListener("click", doKicad);

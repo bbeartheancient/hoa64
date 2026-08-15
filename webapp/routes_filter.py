@@ -15,7 +15,7 @@ import uuid
 from collections import OrderedDict
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
@@ -30,20 +30,22 @@ _KICAD_CACHE: OrderedDict[str, dict[str, str]] = OrderedDict()
 _KICAD_KEPT = 8
 
 F_MIN, F_MAX = 10.0, 40000.0
+F_MIN_LUMPED = 1e-6           # lumped topos may be audio/LF (1 Hz)
 
 
-def _check_f(mhz: float) -> None:
-    if not (F_MIN <= mhz <= F_MAX):
+def _check_f(mhz: float, topo: str | None = None) -> None:
+    f_min = F_MIN_LUMPED if topo in rf_filter.LUMPED_TOPOS else F_MIN
+    if not (f_min <= mhz <= F_MAX):
         raise HTTPException(
             status_code=400,
-            detail=f"frequency must be {F_MIN:g}..{F_MAX:g} MHz",
+            detail=f"frequency must be {f_min:g}..{F_MAX:g} MHz",
         )
 
 
 def _design_from_req(kind: str, proto: str, n: int, f_c_mhz: float | None,
                      f_lo_mhz: float | None, f_hi_mhz: float | None,
                      eps_r: float, h_mm: float, tan_delta: float,
-                     ripple_db: float) -> dict:
+                     ripple_db: float, topo: str | None = None) -> dict:
     if kind not in rf_filter.KINDS:
         raise HTTPException(
             status_code=400,
@@ -63,7 +65,7 @@ def _design_from_req(kind: str, proto: str, n: int, f_c_mhz: float | None,
             f_lo=None if f_lo_mhz is None else f_lo_mhz * 1e6,
             f_hi=None if f_hi_mhz is None else f_hi_mhz * 1e6,
             n=n, proto=proto, eps_r=eps_r, h_m=h_mm * 1e-3,
-            tan_delta=tan_delta, ripple_db=ripple_db,
+            tan_delta=tan_delta, ripple_db=ripple_db, topo=topo,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -89,6 +91,8 @@ def _pack(design: dict, n_sweep: int = 81) -> dict:
         "sweep": sw_out,
         "preview": prev,
         "layout": lay,
+        "components": design.get("components"),
+        "topos": rf_filter.TOPOS,
     }
 
 
@@ -96,6 +100,7 @@ class DesignReq(BaseModel):
     kind: str = "lpf"
     proto: str = "butterworth"
     n: int = 5
+    topo: str | None = None
     f_c_mhz: float | None = 2450.0
     f_lo_mhz: float | None = None
     f_hi_mhz: float | None = None
@@ -109,11 +114,11 @@ class DesignReq(BaseModel):
 @router.post("/design")
 def design(req: DesignReq) -> dict:
     if req.f_c_mhz is not None:
-        _check_f(req.f_c_mhz)
+        _check_f(req.f_c_mhz, req.topo)
     if req.f_lo_mhz is not None:
-        _check_f(req.f_lo_mhz)
+        _check_f(req.f_lo_mhz, req.topo)
     if req.f_hi_mhz is not None:
-        _check_f(req.f_hi_mhz)
+        _check_f(req.f_hi_mhz, req.topo)
     if not (1.0 <= req.eps_r <= 20.0):
         raise HTTPException(status_code=400, detail="eps_r must be 1..20")
     if not (0.05 <= req.h_mm <= 6.0):
@@ -121,7 +126,7 @@ def design(req: DesignReq) -> dict:
     n_sweep = max(11, min(401, req.n_sweep))
     d = _design_from_req(req.kind, req.proto, req.n, req.f_c_mhz,
                          req.f_lo_mhz, req.f_hi_mhz, req.eps_r, req.h_mm,
-                         req.tan_delta, req.ripple_db)
+                         req.tan_delta, req.ripple_db, req.topo)
     return _jsafe(_pack(d, n_sweep))
 
 
@@ -155,6 +160,7 @@ class KicadReq(BaseModel):
     kind: str = "lpf"
     proto: str = "butterworth"
     n: int = 5
+    topo: str | None = None
     f_c_mhz: float = 2450.0
     f_lo_mhz: float | None = None
     f_hi_mhz: float | None = None
@@ -167,7 +173,7 @@ class KicadReq(BaseModel):
 
 @router.post("/kicad")
 def kicad(req: KicadReq) -> dict:
-    _check_f(req.f_c_mhz)
+    _check_f(req.f_c_mhz, req.topo)
     if req.design is not None:
         design = req.design
         if "sections" not in design:
@@ -175,7 +181,8 @@ def kicad(req: KicadReq) -> dict:
     else:
         design = _design_from_req(req.kind, req.proto, req.n, req.f_c_mhz,
                                   req.f_lo_mhz, req.f_hi_mhz, req.eps_r,
-                                  req.h_mm, req.tan_delta, req.ripple_db)
+                                  req.h_mm, req.tan_delta, req.ripple_db,
+                                  req.topo)
     try:
         files = kicad_gen.kicad_files(
             "filter", design["f_c"],
@@ -206,8 +213,8 @@ def kicad_list(token: str) -> dict:
     return {"token": token, "files": sorted(entry)}
 
 
-@router.get("/kicad/{token}/{name}")
-def kicad_file(token: str, name: str) -> PlainTextResponse:
+@router.get("/kicad/{token}/{name:path}")
+def kicad_file(token: str, name: str) -> Response:
     entry = _KICAD_CACHE.get(token)
     content = entry.pop(name, None) if entry is not None else None
     if content is None:
@@ -216,16 +223,19 @@ def kicad_file(token: str, name: str) -> PlainTextResponse:
         )
     if not entry:
         _KICAD_CACHE.pop(token, None)
-    return PlainTextResponse(
-        content,
-        headers={"Content-Disposition": f'attachment; filename="{name}"'},
-    )
+    headers = {"Content-Disposition": f'attachment; filename="{name}"'}
+    if isinstance(content, bytes):
+        media = ("application/zip" if name.endswith(".zip")
+                 else "application/octet-stream")
+        return Response(content, media_type=media, headers=headers)
+    return PlainTextResponse(content, headers=headers)
 
 
 class EvolveReq(BaseModel):
     kind: str = "lpf"
     proto: str = "butterworth"
     n: int = 5
+    topo: str | None = None
     f_c_mhz: float = 2450.0
     f_lo_mhz: float | None = None
     f_hi_mhz: float | None = None
@@ -311,6 +321,18 @@ def evolve_start(req: EvolveReq) -> dict:
         raise HTTPException(status_code=400, detail=f"unknown kind {req.kind!r}")
     if req.proto not in rf_filter.PROTOS:
         raise HTTPException(status_code=400, detail=f"unknown proto {req.proto!r}")
+    if req.topo is not None:
+        if req.topo not in rf_filter.TOPOS[req.kind]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"topology {req.topo!r} not available for {req.kind}; "
+                       f"expected one of {rf_filter.TOPOS[req.kind]}",
+            )
+        if req.topo in rf_filter.LUMPED_TOPOS:
+            raise HTTPException(
+                status_code=400,
+                detail="evolution supports distributed topologies only",
+            )
     ho = req.hadamard_order
     if not (4 <= ho <= 128) or ho & (ho - 1):
         raise HTTPException(

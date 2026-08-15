@@ -63,6 +63,8 @@ mm with 6-decimal formatting, geometry centered at the origin.
 
 from __future__ import annotations
 
+import io
+import json
 import math
 import os
 import re
@@ -70,6 +72,7 @@ import shutil
 import subprocess
 import tempfile
 import uuid
+import zipfile
 
 from .em_physics import ANTENNA_TYPES, ETA0, medium_params
 
@@ -1053,6 +1056,252 @@ def footprint_from_walk(points_m, f_hz: float, eps_r: float = 4.4,
         comment, body, text_dy=max(ymax + 3.0, 5.0))
 
 
+# --- lumped-filter schematic + design blocks (.kicad_block) ---------------------
+
+# Pin coordinates of the embedded library symbols (our own definitions —
+# no reliance on KiCad system libraries): 2-pin devices are vertical with
+# pin 1 at (0, −3.81) and pin 2 at (0, +3.81), body spanning ±2.54 mm;
+# the GND power symbol has its pin at (0, 0) with graphics below (+y down).
+_SCH_PIN = 3.81
+_SCH_PITCH = 25.4
+_SCH_Y = 60.0
+
+
+def _eng_si(value: float, unit: str) -> str:
+    """Engineering SI string: 1.2e-9, "H" → '1.2n H'… Ω uses bare suffix."""
+    v = float(value)
+    if v == 0.0:
+        return "0" if unit == "Ω" else f"0 {unit}"
+    e = int(math.floor(math.log10(abs(v)) / 3.0) * 3)
+    e = max(-12, min(3, e))
+    pre = {-12: "p", -9: "n", -6: "u", -3: "m", 0: "", 3: "k"}[e]
+    m = v / 10.0 ** e
+    if unit == "Ω":
+        return f"{m:.4g}{pre}"
+    return f"{m:.4g} {pre}{unit}"
+
+
+def _sch_lib_symbols() -> str:
+    """Minimal embedded symbol library: Device_R/L/C + GND power symbol.
+
+    Graphics and pin coordinates are defined here so symbol placement is
+    deterministic regardless of the host's KiCad libraries.
+    """
+    prop = ('(property "Reference" "{ref}" (at 2.54 0 90) '
+            '(effects (font (size 1.27 1.27))))\n'
+            '      (property "Value" "{val}" (at 3.81 0 90) '
+            '(effects (font (size 1.27 1.27))))\n'
+            '      (property "Footprint" "" (at 0 0 0) '
+            '(effects (font (size 1.27 1.27)) hide))\n'
+            '      (property "Datasheet" "" (at 0 0 0) '
+            '(effects (font (size 1.27 1.27)) hide))')
+    pins = ('(pin passive line (at 0 -3.81 90) (length 1.27) '
+            '(name "~" (effects (font (size 1.27 1.27)))) '
+            '(number "1" (effects (font (size 1.27 1.27)))))\n'
+            '        (pin passive line (at 0 3.81 270) (length 1.27) '
+            '(name "~" (effects (font (size 1.27 1.27)))) '
+            '(number "2" (effects (font (size 1.27 1.27)))))')
+    r_gfx = ('(rectangle (start -1.016 -2.54) (end 1.016 2.54) '
+             '(stroke (width 0.254) (type default)) (fill (type none)))')
+    l_gfx = ('(polyline (pts '
+             + " ".join(_xy(p) for p in
+                        [(0, -2.54), (-0.5, -1.9), (0.5, -1.27), (-0.5, -0.64),
+                         (0.5, 0.0), (-0.5, 0.64), (0.5, 1.27), (-0.5, 1.9),
+                         (0, 2.54)])
+             + ') (stroke (width 0.254) (type default)) (fill (type none)))')
+    c_gfx = ('(polyline (pts (xy 0 -2.54) (xy 0 -0.508)) '
+             '(stroke (width 0.254) (type default)) (fill (type none)))\n'
+             '        (polyline (pts (xy 0 0.508) (xy 0 2.54)) '
+             '(stroke (width 0.254) (type default)) (fill (type none)))\n'
+             '        (polyline (pts (xy -1.016 -0.508) (xy 1.016 -0.508)) '
+             '(stroke (width 0.254) (type default)) (fill (type none)))\n'
+             '        (polyline (pts (xy -1.016 0.508) (xy 1.016 0.508)) '
+             '(stroke (width 0.254) (type default)) (fill (type none)))')
+    out = []
+    for name, ref, gfx in (("Device_R", "R", r_gfx),
+                           ("Device_L", "L", l_gfx),
+                           ("Device_C", "C", c_gfx)):
+        out.append(
+            f'    (symbol "hoa64:{name}" (pin_numbers hide) '
+            '(pin_names hide) (exclude_from_sim no) (in_bom yes) '
+            '(on_board yes)\n'
+            + "      " + prop.format(ref=ref, val=name) + "\n"
+            + f'      (symbol "{name}_0_1"\n        {gfx})\n'
+            + f'      (symbol "{name}_1_1"\n        {pins}))')
+    gnd_gfx = ('(polyline (pts (xy -2.54 1.27) (xy 2.54 1.27)) '
+               '(stroke (width 0.254) (type default)) (fill (type none)))\n'
+               '        (polyline (pts (xy -1.27 1.905) (xy 1.27 1.905)) '
+               '(stroke (width 0.254) (type default)) (fill (type none)))\n'
+               '        (polyline (pts (xy -0.42 2.54) (xy 0.42 2.54)) '
+               '(stroke (width 0.254) (type default)) (fill (type none)))')
+    out.append(
+        '    (symbol "hoa64:GND" (power) (pin_numbers hide) '
+        '(pin_names hide) (exclude_from_sim no) (in_bom yes) '
+        '(on_board yes)\n'
+        + "      " + prop.format(ref="#PWR", val="GND") + "\n"
+        + '      (symbol "GND_0_1"\n        ' + gnd_gfx + ")\n"
+        + '      (symbol "GND_1_1"\n        '
+        '(pin power_in line (at 0 0 90) (length 1.27) '
+        '(name "GND" (effects (font (size 1.27 1.27)))) '
+        '(number "1" (effects (font (size 1.27 1.27)))))))')
+    return "\n".join(out)
+
+
+def schematic_lumped(design: dict) -> str:
+    """Minimal valid KiCad ≥7 ``.kicad_sch`` of a lumped filter ladder.
+
+    Horizontal ladder: IN label → series symbols (rotated 90°, spaced
+    25.4 mm) → OUT label; shunt symbols drop 25.4 mm at their node to a
+    GND power symbol.  Symbol definitions are embedded in `lib_symbols`
+    (see `_sch_lib_symbols`), so placement is deterministic.  References
+    and Values come from the design's `components` BOM.
+    """
+    comps = design.get("components") or []
+    if not comps:
+        raise ValueError("design has no components (not a lumped topology)")
+    y = _SCH_Y
+    x_in, x0 = 25.4, 50.8
+    insts, wires = [], []
+
+    def wire(ax: float, ay: float, bx: float, by: float) -> None:
+        wires.append(
+            f"  (wire (pts (xy {_fmt(ax)} {_fmt(ay)}) "
+            f"(xy {_fmt(bx)} {_fmt(by)})) "
+            "(stroke (width 0) (type default)) "
+            f"(uuid {_tstamp()}))")
+
+    def instance(lib: str, ref: str, val: str, x: float, yy: float,
+                 rot: int, npins: int = 2) -> None:
+        pins = " ".join(f'(pin "{i}" (uuid {_tstamp()}))'
+                        for i in range(1, npins + 1))
+        insts.append(
+            f'  (symbol (lib_id "hoa64:{lib}") '
+            f"(at {_fmt(x)} {_fmt(yy)} {rot}) (unit 1) "
+            "(exclude_from_sim no) (in_bom yes) (on_board yes) "
+            f"(dnp no) (fields_autoplaced yes) (uuid {_tstamp()})\n"
+            f"    {pins}\n"
+            f'    (property "Reference" "{ref}" '
+            f"(at {_fmt(x + 2.54)} {_fmt(yy - 2.54)} 0) "
+            "(effects (font (size 1.27 1.27)) (justify left)))\n"
+            f'    (property "Value" "{val}" '
+            f"(at {_fmt(x + 2.54)} {_fmt(yy)} 0) "
+            "(effects (font (size 1.27 1.27)) (justify left)))\n"
+            '    (property "Footprint" "" '
+            f"(at {_fmt(x)} {_fmt(yy)} 0) "
+            "(effects (font (size 1.27 1.27)) hide))\n"
+            '    (property "Datasheet" "" '
+            f"(at {_fmt(x)} {_fmt(yy)} 0) "
+            "(effects (font (size 1.27 1.27)) hide)))")
+
+    cur = x_in
+    for i, c in enumerate(comps):
+        x = x0 + i * _SCH_PITCH
+        lib = f"Device_{c['type']}"
+        val = _eng_si(c["value"], c["unit"])
+        if c["role"] == "series":
+            instance(lib, c["ref"], val, x, y, 90)
+            wire(cur, y, x - _SCH_PIN, y)
+            cur = x + _SCH_PIN
+        else:
+            instance(lib, c["ref"], val, x, y + _SCH_PIN, 0)
+            wire(cur, y, x, y)                       # node at (x, y)
+            wire(x, y + 2.0 * _SCH_PIN, x, y + 2.0 * _SCH_PIN + 2.54)
+            instance("GND", "#PWR", "GND", x,
+                     y + 2.0 * _SCH_PIN + 2.54, 0, npins=1)
+            cur = x
+    x_out = x0 + len(comps) * _SCH_PITCH
+    wire(cur, y, x_out, y)
+    labels = []
+    for txt, lx in (("IN", x_in), ("OUT", x_out)):
+        labels.append(
+            f'  (label "{txt}" (at {_fmt(lx)} {_fmt(y)} 0) '
+            "(fields_autoplaced yes) "
+            "(effects (font (size 1.27 1.27)) (justify left bottom)) "
+            f"(uuid {_tstamp()}))")
+    kind, topo = design["kind"], design.get("topo", "lc")
+    title = f"hoa64 {kind} {topo} {_ftag(design['f_c'])}"
+    bom = ", ".join(f"{c['ref']}={_eng_si(c['value'], c['unit'])}"
+                    for c in comps)
+    parts = [
+        "(kicad_sch (version 20231120)",
+        '  (generator "hoa64")',
+        '  (generator_version "8.0")',
+        f"  (uuid {_tstamp()})",
+        '  (paper "A4")',
+        f'  (title_block (title "{title}") '
+        f'(comment 1 "{bom} — hoa64.kicad_gen"))',
+        "  (lib_symbols\n" + _sch_lib_symbols() + ")",
+        *insts,
+        *wires,
+        *labels,
+        '  (sheet_instances (path "/" (page "1")))',
+        "  (embedded_fonts no)",
+        ")",
+    ]
+    return "\n".join(parts) + "\n"
+
+
+def _ftag(f_hz: float) -> str:
+    """Frequency tag for filenames: 2.45e9 → '2450mhz', 1e3 → '1khz'."""
+    f = float(f_hz)
+    if f >= 1e6:
+        return f"{_mhz(f)}mhz"
+    if f >= 1e3:
+        return f"{int(round(f / 1e3))}khz"
+    return f"{int(round(f))}hz"
+
+
+def design_block_lumped(design: dict) -> dict:
+    """KiCad design block for a lumped filter: {filename: content}.
+
+    A ``.kicad_block`` is a *folder* (KiCad ≥ 8) holding the schematic
+    (``block.kicad_sch``, embedded symbols), metadata (``block.json``),
+    and the 0805-cascade board (``block.kicad_pcb``); the folder is
+    also packed into a ``*_design_block.zip`` (bytes content).
+    """
+    from . import rf_filter
+    kind = design["kind"]
+    topo = design.get("topo", "lc")
+    if topo not in rf_filter.LUMPED_TOPOS:
+        raise ValueError(f"design blocks are for lumped topologies, "
+                         f"got {topo!r}")
+    ftag = _ftag(design["f_c"])
+    folder = f"hoa64_{kind}_{topo}_{ftag}.kicad_block"
+    sch = schematic_lumped(design)
+    meta = {
+        "name": folder,
+        "description": (f"hoa64 {kind} {design.get('proto')} n="
+                        f"{design['n']} @ {ftag}, topology {topo}"),
+        "keywords": ["hoa64", "rf-filter", kind, topo],
+        "hoa64": {
+            "design": {k: design[k] for k in
+                       ("kind", "topo", "proto", "n", "f_c", "f_lo",
+                        "f_hi", "z0") if k in design},
+            "components": design.get("components") or [],
+            "generator": GENERATOR,
+        },
+    }
+    lay = rf_filter.layout_mm(design)
+    fp = footprint_from_layout(
+        lay, folder,
+        f"hoa64 {kind} {topo} filter, {ftag} (0805 cascade)",
+        f"{kind} {topo} n={design['n']} @ {ftag}, lumped BOM, "
+        "0805 pads, shunt drops via'd to GND (hoa64.kicad_gen)")
+    files = {
+        f"{folder}/block.kicad_sch": sch,
+        f"{folder}/block.json": json.dumps(meta, indent=2),
+        f"{folder}/block.kicad_pcb": board_from_footprint(
+            fp, design["f_c"], design.get("eps_r", 4.4),
+            design.get("h_m", 1.6e-3), title=folder),
+    }
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for name, content in files.items():
+            z.writestr(name, content)
+    files[f"hoa64_{kind}_{topo}_{ftag}_design_block.zip"] = buf.getvalue()
+    return files
+
+
 def kicad_files(design_type: str, f_hz: float, **opts) -> dict:
     """{filename: content} for design_type ∈ {patch, meander_ifa, mifa,
     loop, lib, evolved, filter}.
@@ -1100,9 +1349,9 @@ def kicad_files(design_type: str, f_hz: float, **opts) -> dict:
         return _with_board(f"hoa64_evolved_pcb_{mhz}.kicad_mod", fp, f_hz, opts,
                            title=f"hoa64 evolved PCB {mhz} MHz")
     if design_type == "filter":
+        from . import rf_filter
         design = opts.get("design")
         if design is None:
-            from . import rf_filter
             design = rf_filter.design_filter(
                 opts.get("filter_kind", "lpf"),
                 f_c=f_hz,
@@ -1114,10 +1363,13 @@ def kicad_files(design_type: str, f_hz: float, **opts) -> dict:
                 h_m=float(opts.get("h_m", 1.6e-3)),
             )
         fp = footprint_filter(design)
-        return _with_board(
+        out = _with_board(
             f"hoa64_filter_{design['kind']}_{_mhz(design['f_c'])}.kicad_mod",
             fp, design["f_c"], opts,
             title=f"hoa64 {design['kind']} { _mhz(design['f_c']) } MHz")
+        if design.get("topo") in rf_filter.LUMPED_TOPOS:
+            out.update(design_block_lumped(design))
+        return out
     if design_type == "materials":
         lay = opts.get("layout")
         if not lay:
@@ -1240,6 +1492,29 @@ if __name__ == "__main__":
     files_f = kicad_files("filter", F0, design=lpf)
     assert any(k.endswith(".kicad_pcb") for k in files_f)
     print(f"PASS  filter footprint + board ({lpf['kind']} n={lpf['n']})")
+
+    # --- lumped filter: embedded-symbol schematic + design block ---
+    lpf_lc = _rf.design_filter("lpf", f_c=100e6, n=3, topo="lc")
+    sch = schematic_lumped(lpf_lc)
+    stree = parse_sexpr(sch)
+    assert stree[0] == "kicad_sch"
+    assert _find_all(stree, "lib_symbols"), "no lib_symbols"
+    assert len(_find_all(stree, "wire")) >= 1, "no wires"
+    syms = _find_all(_find_all(stree, "lib_symbols")[0], "symbol")
+    assert any("Device_L" in str(s) for s in syms)
+    blk = design_block_lumped(lpf_lc)
+    assert any(k.endswith(".kicad_block/block.kicad_sch") for k in blk)
+    assert any(k.endswith(".kicad_block/block.json") for k in blk)
+    assert any(k.endswith(".kicad_block/block.kicad_pcb") for k in blk)
+    zname = next(k for k in blk if k.endswith("_design_block.zip"))
+    assert zipfile.is_zipfile(io.BytesIO(blk[zname]))
+    files_lc = kicad_files("filter", lpf_lc["f_c"], design=lpf_lc)
+    assert any(k.endswith(".kicad_sch") for k in files_lc)
+    assert any(k.endswith(".zip") for k in files_lc)
+    assert any(k.endswith(".kicad_pcb") for k in files_lc)
+    print(f"PASS  lumped design block: .kicad_sch parses ({len(syms)} lib "
+          f"symbols, {len(_find_all(stree, 'wire'))} wires), block.json + "
+          f"zip in kicad_files ({len(files_lc)} files)")
 
     walk = [[0, 0, 0], [0.005, 0, 0], [0.005, 0.005, 0], [0.01, 0.005, 0]]
     fev = footprint_from_walk(walk, F0)

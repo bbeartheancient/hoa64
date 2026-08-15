@@ -49,10 +49,26 @@ corner of the design is *not* required (electrical length *is* the
 knob).  Energy: passband IL, passband RL vs 10 dB, stopband rejection
 vs 40 dBc, DFM (5 mil), size.
 
-**Output forms.**  This module currently realises the prototype as
-distributed microstrip (KiCad copper).  The same *g*-values also
-determine lumped ladders — series-L/shunt-C (LC), RC, and CRC/π —
-which are a planned extra export, not a second solver.
+**Topologies.**  `design_filter(kind, …, topo=…)` selects the
+realisation per kind (`TOPOS`); the default is always the distributed
+microstrip form above, so existing calls are unchanged:
+
+* **lc** — lumped LC ladder from the same g-values (Pozar 8.4: LP→HP
+  dual, LP→BP / LP→BS reactance transforms, f₀ = √(f_lo·f_hi)).
+* **qw_tl** — commensurate quarter-wave TEM filter: Richards'
+  transform + Kuroda identities (LPF all-shunt open stubs / BPF
+  shorted-stub resonators) separated by λ/4 unit elements.
+* **dc_lc** — capacitively-coupled shunt-LC resonator BPF (nodal
+  J-inverter ladder, Pozar 8.7 with J ≈ ω₀C_c).
+* **c_shunt** — combline-style BPF: shorted stubs < λ/4 resonated by
+  shunt loading caps, gap-capacitor J-inverters.
+* **rc / crc / rl** — passive audio/LF ladders (staged 1st-order
+  corners; honest approximations, see `design_rc`).
+
+Lumped designs carry a `components` BOM ({ref,type,value,unit,role})
+and lay out as an 0805 SMD pad cascade; every design dict sets `topo`.
+All topologies evaluate through the same ABCD → S-parameter path —
+the lumped section kinds are ideal two-terminal elements.
 """
 
 from __future__ import annotations
@@ -67,6 +83,14 @@ from .hadamard import sylvester
 
 KINDS = ("lpf", "hpf", "bpf", "bsf")
 PROTOS = ("butterworth", "chebyshev")
+TOPOS = {
+    "lpf": ("stepped", "lc", "qw_tl", "rc", "crc", "rl"),
+    "hpf": ("stub", "lc", "rc", "rl"),
+    "bpf": ("hairpin", "lc", "dc_lc", "qw_tl", "c_shunt"),
+    "bsf": ("stub", "lc"),
+}
+# lumped topologies: audio/LF-capable, SMD BOM, schematic export
+LUMPED_TOPOS = frozenset({"lc", "rc", "crc", "rl", "dc_lc"})
 MIN_TRACE_M = 0.127e-3          # 5 mil JLCPCB floor
 Z_HIGH = 100.0
 Z_LOW = 20.0
@@ -217,6 +241,41 @@ def _section_abcd(sec: dict, f_hz: float) -> np.ndarray:
         return _abcd_series_z(1.0 / (1j * w * max(sec["c_f"], 1e-18)))
     if kind == "inverter":
         return _abcd_j(sec["j"], sec.get("z0", 50.0))
+    # --- lumped two-terminal elements (ideal L/C/R) ---
+    w = 2.0 * math.pi * f_hz
+    if kind == "series_l":                       # Z = jωL (+ optional ESR)
+        return _abcd_series_z(1j * w * sec["l_h"] + sec.get("r_ohm", 0.0))
+    if kind == "series_c":                       # Z = 1/(jωC)
+        return _abcd_series_z(1.0 / (1j * w * max(sec["c_f"], 1e-18)))
+    if kind == "series_r":                       # Z = R
+        return _abcd_series_z(sec["r_ohm"])
+    if kind == "shunt_l":                        # Y = 1/(jωL)
+        return _abcd_shunt_y(1.0 / (1j * w * max(sec["l_h"], 1e-18)))
+    if kind == "shunt_c":                        # Y = jωC
+        return _abcd_shunt_y(1j * w * sec["c_f"])
+    if kind == "shunt_r":                        # Y = 1/R
+        return _abcd_shunt_y(1.0 / max(sec["r_ohm"], 1e-12))
+    if kind == "series_rl":                      # Z = R + jωL (lossy L)
+        return _abcd_series_z(sec["r_ohm"] + 1j * w * sec["l_h"])
+    if kind == "shunt_rc":                       # Y = 1/R + jωC (R‖C to gnd)
+        return _abcd_shunt_y(1.0 / max(sec["r_ohm"], 1e-12)
+                             + 1j * w * sec["c_f"])
+    if kind == "shunt_lc":                       # Y = jωC + 1/(jωL)  (L‖C gnd)
+        return _abcd_shunt_y(1j * w * sec["c_f"]
+                             + 1.0 / (1j * w * max(sec["l_h"], 1e-18)))
+    if kind == "series_lc":                      # Z = jωL + 1/(jωC)
+        z = 1j * w * sec["l_h"] + 1.0 / (1j * w * max(sec["c_f"], 1e-18))
+        return _abcd_series_z(z)
+    if kind == "series_plc":                     # Z = jωL/(1−ω²LC)  (L‖C arm)
+        den = 1.0 - w * w * sec["l_h"] * sec["c_f"]
+        if abs(den) < 1e-12:
+            den = 1e-12
+        return _abcd_series_z(1j * w * sec["l_h"] / den)
+    if kind == "shunt_slc":                      # Y = 1/(jωL + 1/jωC) (to gnd)
+        z = 1j * w * sec["l_h"] + 1.0 / (1j * w * max(sec["c_f"], 1e-18))
+        if abs(z) < 1e-15:
+            z = 1e-15
+        return _abcd_shunt_y(1.0 / z)
     raise ValueError(f"unknown section kind {kind!r}")
 
 
@@ -266,8 +325,8 @@ def _lam_g(f_hz: float, eps_e: float) -> float:
 
 def _fill(kind: str, proto: str, n: int, f_c: float, f_lo: float, f_hi: float,
           eps_r: float, h_m: float, tan_delta: float, ripple_db: float,
-          g: list[float], sections: list[dict], extra: dict | None = None
-          ) -> dict:
+          g: list[float], sections: list[dict], extra: dict | None = None,
+          topo: str | None = None) -> dict:
     w50 = microstrip_width(eps_r, h_m, 50.0)
     qu = q_unloaded(f_c, eps_r, h_m, tan_delta)
     fbw = (f_hi - f_lo) / f_c if f_hi > f_lo else 1.0
@@ -275,6 +334,7 @@ def _fill(kind: str, proto: str, n: int, f_c: float, f_lo: float, f_hi: float,
     il_est = 4.343 * g_sum / max(fbw * qu, 1e-9)
     d = {
         "kind": kind, "proto": proto, "n": int(n),
+        "topo": topo or TOPOS[kind][0],
         "f_c": float(f_c), "f_lo": float(f_lo), "f_hi": float(f_hi),
         "eps_r": float(eps_r), "h_m": float(h_m),
         "tan_delta": float(tan_delta), "ripple_db": float(ripple_db),
@@ -439,17 +499,561 @@ def design_bsf(f_lo: float, f_hi: float, n: int = 3,
                  ripple_db, g, sections, {"fbw": float(delta)})
 
 
+# --- lumped / commensurate topologies ------------------------------------------
+
+
+def _add_comp(comps: list[dict], prefix: str, value: float, role: str) -> None:
+    """Append a BOM entry {ref,type,value,unit,role}; refs count per type."""
+    k = sum(1 for c in comps if c["type"] == prefix) + 1
+    comps.append({"ref": f"{prefix}{k}", "type": prefix,
+                  "value": float(value),
+                  "unit": {"L": "H", "C": "F", "R": "Ω"}[prefix],
+                  "role": role})
+
+
+def design_lc(kind: str, f_c: float | None = None,
+              f_lo: float | None = None, f_hi: float | None = None,
+              n: int = 5, proto: str = "butterworth", ripple_db: float = 0.1,
+              z0: float = 50.0, eps_r: float = 4.4, h_m: float = 1.6e-3,
+              tan_delta: float = 0.02) -> dict:
+    """Lumped LC ladder from the g-prototype (Pozar 8.3/8.4).
+
+    Series-first ladder between a Z₀ source and load:
+
+    * **LPF** — series L_k = g_k Z₀/ω_c (odd k), shunt C_k = g_k/(Z₀ ω_c).
+    * **HPF** — LP→HP dual: series C_k = 1/(g_k Z₀ ω_c), shunt
+      L_k = Z₀/(g_k ω_c).
+    * **BPF/BSF** — LP→BP / LP→BS reactance transforms (Pozar 8.4,
+      Table 8.6) with ω₀ = √(ω_lo ω_hi) (geometric mean) and
+      Δ = (f_hi − f_lo)/f₀.  Every branch resonates at f₀:
+
+      =====  ============================  ==============================
+      arm    BP (series LC / shunt L‖C)    BS (series L‖C / shunt LC)
+      =====  ============================  ==============================
+      series L = g_k Z₀/(Δω₀)             L = Δ g_k Z₀/ω₀
+             C = Δ/(g_k Z₀ ω₀)            C = 1/(Δ g_k Z₀ ω₀)
+      shunt  L = Δ Z₀/(g_k ω₀)            L = Z₀/(Δ g_k ω₀)
+             C = g_k/(Δ Z₀ ω₀)            C = Δ g_k/(Z₀ ω₀)
+      =====  ============================  ==============================
+    """
+    kind = kind.lower()
+    if kind not in KINDS:
+        raise ValueError(f"unknown filter kind {kind!r}; expected {KINDS}")
+    g = prototype_g(proto, n, ripple_db)
+    z0 = float(z0)
+    comps: list[dict] = []
+    sections: list[dict] = []
+    extra: dict = {}
+    if kind in ("lpf", "hpf"):
+        if f_c is None:
+            raise ValueError(f"{kind} requires f_c")
+        wc = 2.0 * math.pi * float(f_c)
+        for k in range(1, n + 1):
+            if kind == "lpf":
+                if k % 2 == 1:
+                    l_h = g[k] * z0 / wc
+                    sections.append({"kind": "series_l", "l_h": l_h})
+                    _add_comp(comps, "L", l_h, "series")
+                else:
+                    c_f = g[k] / (z0 * wc)
+                    sections.append({"kind": "shunt_c", "c_f": c_f})
+                    _add_comp(comps, "C", c_f, "shunt")
+            else:
+                if k % 2 == 1:
+                    c_f = 1.0 / (g[k] * z0 * wc)
+                    sections.append({"kind": "series_c", "c_f": c_f})
+                    _add_comp(comps, "C", c_f, "series")
+                else:
+                    l_h = z0 / (g[k] * wc)
+                    sections.append({"kind": "shunt_l", "l_h": l_h})
+                    _add_comp(comps, "L", l_h, "shunt")
+        fc = float(f_c)
+        flo, fhi = (0.0, fc) if kind == "lpf" else (fc, 4.0 * fc)
+    else:
+        if f_lo is None or f_hi is None or not (f_lo < f_hi):
+            raise ValueError(f"{kind} requires f_lo < f_hi")
+        f0 = math.sqrt(float(f_lo) * float(f_hi))
+        delta = (float(f_hi) - float(f_lo)) / f0
+        w0 = 2.0 * math.pi * f0
+        for k in range(1, n + 1):
+            if kind == "bpf":
+                if k % 2 == 1:
+                    l_h = g[k] * z0 / (delta * w0)
+                    c_f = delta / (g[k] * z0 * w0)
+                    sections.append({"kind": "series_lc",
+                                     "l_h": l_h, "c_f": c_f})
+                else:
+                    l_h = delta * z0 / (g[k] * w0)
+                    c_f = g[k] / (delta * z0 * w0)
+                    sections.append({"kind": "shunt_lc",
+                                     "l_h": l_h, "c_f": c_f})
+            else:                                   # bsf
+                if k % 2 == 1:
+                    l_h = delta * g[k] * z0 / w0
+                    c_f = 1.0 / (delta * g[k] * z0 * w0)
+                    sections.append({"kind": "series_plc",
+                                     "l_h": l_h, "c_f": c_f})
+                else:
+                    l_h = z0 / (delta * g[k] * w0)
+                    c_f = g[k] * delta / (z0 * w0)
+                    sections.append({"kind": "shunt_slc",
+                                     "l_h": l_h, "c_f": c_f})
+            _add_comp(comps, "L", sections[-1]["l_h"],
+                      "series" if k % 2 == 1 else "shunt")
+            _add_comp(comps, "C", sections[-1]["c_f"],
+                      "series" if k % 2 == 1 else "shunt")
+        fc, flo, fhi = f0, float(f_lo), float(f_hi)
+        extra = {"fbw": float(delta)}
+    d = _fill(kind, proto, n, fc, flo, fhi, eps_r, h_m, tan_delta,
+              ripple_db, g, sections,
+              {"il_est_db": 0.0, "z0": z0, **extra}, topo="lc")
+    d["components"] = comps
+    return d
+
+
+def design_dc_lc(f_lo: float, f_hi: float, n: int = 3,
+                 proto: str = "butterworth", ripple_db: float = 0.1,
+                 z0: float = 50.0, eps_r: float = 4.4, h_m: float = 1.6e-3,
+                 tan_delta: float = 0.02) -> dict:
+    """Capacitively-coupled shunt-LC band-pass (nodal "dc_lc" ladder).
+
+    n identical shunt parallel-LC resonators at f₀ = √(f_lo·f_hi) with
+    L_r = Z₀/ω₀, C_r = 1/(ω₀² L_r) (slope parameter b = ω₀ C_r = Y₀),
+    coupled by series capacitors approximating J-inverters (Pozar 8.7):
+
+        J_{0,1}   = √(Y₀ b Δ/(g₀ g₁)),   J_{k,k+1} = Δ b/√(g_k g_{k+1}),
+        J_{n,n+1} = √(Y₀ b Δ/(g_n g_{n+1})),   C_c = J/ω₀.
+
+    A series capacitor between two resonator nodes inverts with
+    J ≈ ω₀ C_c and contributes −C_c shunt arms, absorbed into the
+    resonators:
+
+        C_k = C_r − C_{k−1,k} − C_{k,k+1}     (must stay positive).
+
+    Approximation: J = ω₀ C_c is first-order in the coupling reactance
+    — accurate for narrow/moderate fractional bandwidths (Δ ≲ 0.2).
+    End coupling to Z₀ is the J_{0,1} / J_{n,n+1} capacitor.
+    """
+    if not (f_lo < f_hi):
+        raise ValueError("f_lo must be < f_hi")
+    g = prototype_g(proto, n, ripple_db)
+    z0 = float(z0)
+    y0 = 1.0 / z0
+    f0 = math.sqrt(float(f_lo) * float(f_hi))
+    delta = (float(f_hi) - float(f_lo)) / f0
+    w0 = 2.0 * math.pi * f0
+    l_r = z0 / w0
+    c_r = 1.0 / (w0 * w0 * l_r)
+    b = w0 * c_r                                    # = Y₀
+    j = [0.0] * (n + 1)
+    j[0] = math.sqrt(y0 * b * delta / (g[0] * g[1]))
+    for k in range(1, n):
+        j[k] = delta * b / math.sqrt(g[k] * g[k + 1])
+    j[n] = math.sqrt(y0 * b * delta / (g[n] * g[n + 1]))
+    cc = [x / w0 for x in j]                        # series coupling caps
+    comps: list[dict] = []
+    sections: list[dict] = []
+    for k in range(1, n + 1):
+        c_k = c_r - cc[k - 1] - cc[k]
+        if c_k <= 0.0:
+            raise ValueError(
+                f"coupling caps exceed the resonator capacitance at node "
+                f"{k} (C_r={c_r:.3g} F); reduce bandwidth or order")
+        sections.append({"kind": "series_c", "c_f": float(cc[k - 1])})
+        _add_comp(comps, "C", cc[k - 1], "series")
+        sections.append({"kind": "shunt_lc", "l_h": l_r, "c_f": float(c_k)})
+        _add_comp(comps, "L", l_r, "shunt")
+        _add_comp(comps, "C", c_k, "shunt")
+    sections.append({"kind": "series_c", "c_f": float(cc[n])})
+    _add_comp(comps, "C", cc[n], "series")
+    d = _fill("bpf", proto, n, f0, float(f_lo), float(f_hi), eps_r, h_m,
+              tan_delta, ripple_db, g, sections,
+              {"il_est_db": 0.0, "z0": z0, "fbw": float(delta),
+               "j_y0": [float(x / y0) for x in j]}, topo="dc_lc")
+    d["components"] = comps
+    return d
+
+
+def design_qw_tl(kind: str, f_c: float | None = None,
+                 f_lo: float | None = None, f_hi: float | None = None,
+                 n: int = 5, proto: str = "butterworth",
+                 ripple_db: float = 0.1, z0: float = 50.0,
+                 eps_r: float = 4.4, h_m: float = 1.6e-3,
+                 tan_delta: float = 0.02, z_stub_bpf: float = 30.0,
+                 z_min: float = Z_LOW, z_max: float = 150.0) -> dict:
+    """Commensurate quarter-wave TEM-line filter (Richards + Kuroda).
+
+    Richards' transform Ω = tan(βℓ) maps the lumped prototype onto
+    commensurate stubs: a series L is a shorted stub of Z = g_k, a
+    shunt C an open stub of Z = 1/g_k (normalized, λ/8 at f_c so the
+    Ω = 1 cutoff sits at βℓ = π/4).  Kuroda's identities convert the
+    series stubs to shunt form against matched unit elements (a matched
+    UE adds phase only):
+
+        UE(Z_u) · series shorted stub(Z_s)
+              ≡ shunt open stub(Z_u(Z_u+Z_s)/Z_s) · UE(Z_u+Z_s),
+        UE(Z_u) · shunt open stub(Z_o)  ≡  shunt open stub(Z_o) · UE(Z_u),
+
+    so the LPF becomes all *open* stubs separated by λ/8 UEs (λ/4 at
+    the commensurate frequency 2 f_c).
+
+    The BPF uses shunt *shorted* λ/4 stubs at f₀ = √(f_lo f_hi) —
+    parallel resonators with slope b = π Y_stub/4 — separated by λ/4
+    UEs acting as J-inverters (J = 1/Z_ue).  All stubs share
+    Z = `z_stub_bpf` and the UE impedances carry the g-weighting:
+    Z_ue,0,1 = √(g₀g₁/(Y₀ b Δ))·Z₀… i.e. 1/J with J from the usual
+    inverter ladder (see `design_dc_lc`).
+
+    All impedances are clamped to [`z_min`, `z_max`] Ω for microstrip
+    realizability — an intentional, flagged (`z_clamped`) approximation
+    that detunes the exact prototype response (worst for narrow BPF
+    bandwidths, where interior unit elements want Z > 150 Ω).
+    """
+    kind = kind.lower()
+    g = prototype_g(proto, n, ripple_db)
+    z0 = float(z0)
+
+    def _clamp(z: float) -> float:
+        return min(max(z, z_min), z_max)
+
+    if kind == "lpf":
+        if f_c is None:
+            raise ValueError("lpf qw_tl requires f_c")
+        # normalized ladder: s = series shorted stub (Z=g), p = shunt
+        # open stub (Z=1/g); bracket with matched UEs
+        net: list[list] = [["ue", 1.0]]
+        for k in range(1, n + 1):
+            net.append(["s", g[k]] if k % 2 == 1 else ["p", 1.0 / g[k]])
+        net.append(["ue", 1.0])
+        guard = 0
+        while True:
+            i = next((i for i, e in enumerate(net) if e[0] == "s"), None)
+            if i is None:
+                break
+            guard += 1
+            if guard > 200:
+                raise RuntimeError("kuroda elimination did not converge")
+            if net[i - 1][0] == "ue":
+                zu, zs = net[i - 1][1], net[i][1]
+                net[i - 1:i + 1] = [["p", zu * (zu + zs) / zs],
+                                    ["ue", zu + zs]]
+            elif i + 1 < len(net) and net[i + 1][0] == "ue":
+                zu, zs = net[i + 1][1], net[i][1]
+                net[i:i + 2] = [["ue", zu + zs],
+                                ["p", zu * (zu + zs) / zs]]
+            else:
+                # no adjacent UE: bubble the nearest left UE rightward —
+                # UEs commute with shunt stubs (2nd identity)
+                j = i - 1
+                while net[j][0] != "ue":
+                    j -= 1
+                for k in range(j, i - 1):
+                    net[k], net[k + 1] = net[k + 1], net[k]
+        f_c = float(f_c)
+        sections = []
+        zs_net = []
+        for t, zn in net:
+            z = _clamp(zn * z0)
+            zs_net.append(z)
+            ee = eps_eff(eps_r, microstrip_width(eps_r, h_m, z), h_m)
+            ell = _lam_g(f_c, ee) / 8.0
+            if t == "p":
+                sections.append(_stub_sec("open_stub", eps_r, h_m, z, ell,
+                                          tan_delta, f_c))
+            else:
+                sections.append(_line_sec(eps_r, h_m, z, ell, tan_delta, f_c))
+        extra = {
+            "z_sections_ohm": zs_net,
+            "z_clamped": any(abs(a - bnm * z0) > 1e-9
+                             for a, (t, bnm) in zip(zs_net, net)),
+            "f_commensurate": 2.0 * f_c,
+        }
+        return _fill("lpf", proto, n, f_c, 0.0, f_c, eps_r, h_m, tan_delta,
+                     ripple_db, g, sections, extra, topo="qw_tl")
+    if kind == "bpf":
+        if f_lo is None or f_hi is None or not (f_lo < f_hi):
+            raise ValueError("bpf qw_tl requires f_lo < f_hi")
+        f0 = math.sqrt(float(f_lo) * float(f_hi))
+        delta = (float(f_hi) - float(f_lo)) / f0
+        y0 = 1.0 / z0
+        b = math.pi / (4.0 * float(z_stub_bpf))      # shorted λ/4 slope
+        j = [0.0] * (n + 1)
+        j[0] = math.sqrt(y0 * b * delta / (g[0] * g[1]))
+        for k in range(1, n):
+            j[k] = delta * b / math.sqrt(g[k] * g[k + 1])
+        j[n] = math.sqrt(y0 * b * delta / (g[n] * g[n + 1]))
+        z_ue = [_clamp(1.0 / x) for x in j]
+        w_st = microstrip_width(eps_r, h_m, z_stub_bpf)
+        lam4_st = _lam_g(f0, eps_eff(eps_r, w_st, h_m)) / 4.0
+        sections = []
+        zs_net = []
+        for k in range(n + 1):
+            zl = z_ue[k]
+            ee = eps_eff(eps_r, microstrip_width(eps_r, h_m, zl), h_m)
+            sections.append(_line_sec(eps_r, h_m, zl,
+                                      _lam_g(f0, ee) / 4.0, tan_delta, f0))
+            zs_net.append(zl)
+            if k < n:
+                sections.append(_stub_sec("short_stub", eps_r, h_m,
+                                          float(z_stub_bpf), lam4_st,
+                                          tan_delta, f0))
+                zs_net.append(float(z_stub_bpf))
+        extra = {
+            "fbw": float(delta), "z_stub_ohm": float(z_stub_bpf),
+            "z_ue_ohm": z_ue, "z_sections_ohm": zs_net,
+            "z_clamped": any(abs(z_ue[k] - 1.0 / j[k]) > 1e-9
+                             for k in range(n + 1)),
+            "j_y0": [float(x / y0) for x in j],
+        }
+        return _fill("bpf", proto, n, f0, float(f_lo), float(f_hi), eps_r,
+                     h_m, tan_delta, ripple_db, g, sections, extra,
+                     topo="qw_tl")
+    raise ValueError(f"qw_tl topology not defined for kind {kind!r}")
+
+
+def design_c_shunt(f_lo: float, f_hi: float, n: int = 3,
+                   proto: str = "butterworth", ripple_db: float = 0.1,
+                   theta0_deg: float = 60.0, z_stub: float = 50.0,
+                   z0: float = 50.0, eps_r: float = 4.4, h_m: float = 1.6e-3,
+                   tan_delta: float = 0.02) -> dict:
+    """Combline-style capacitively-loaded shunt-resonator BPF.
+
+    Each resonator is a shorted microstrip stub of electrical length
+    θ₀ < 90° at f₀ = √(f_lo f_hi) (default θ₀ = 60°), resonated by a
+    shunt loading capacitor (combline principle, Hong & Lancaster
+    ch. 9):
+
+        C_load = cot θ₀/(ω₀ Z_s),
+        B(ω) = ω C − cot(θ₀ ω/ω₀)/Z_s,
+        b = (ω₀/2) B′(ω₀) = ω₀ C/2 + θ₀ csc²θ₀/(2 Z_s).
+
+    Series gap capacitors approximate the J-inverters (same J ladder as
+    `design_dc_lc`, J ≈ ω₀ C_c) and are inverted to physical gaps with
+    `_gap_from_c`; the loading caps absorb the inverter's negative
+    shunt arms: C_k = C_load − C_{k−1,k} − C_{k,k+1}.  First-order in
+    the coupling — accurate for Δ ≲ 0.2.
+    """
+    if not (f_lo < f_hi):
+        raise ValueError("f_lo must be < f_hi")
+    g = prototype_g(proto, n, ripple_db)
+    z0 = float(z0)
+    y0 = 1.0 / z0
+    f0 = math.sqrt(float(f_lo) * float(f_hi))
+    delta = (float(f_hi) - float(f_lo)) / f0
+    w0 = 2.0 * math.pi * f0
+    th0 = math.radians(float(theta0_deg))
+    c_load = (1.0 / math.tan(th0)) / (w0 * float(z_stub))
+    b = 0.5 * (w0 * c_load + th0 / (math.sin(th0) ** 2 * float(z_stub)))
+    j = [0.0] * (n + 1)
+    j[0] = math.sqrt(y0 * b * delta / (g[0] * g[1]))
+    for k in range(1, n):
+        j[k] = delta * b / math.sqrt(g[k] * g[k + 1])
+    j[n] = math.sqrt(y0 * b * delta / (g[n] * g[n + 1]))
+    cc = [x / w0 for x in j]
+    w50 = microstrip_width(eps_r, h_m, 50.0)
+    ell_st = th0 * _lam_g(f0, eps_eff(eps_r, microstrip_width(
+        eps_r, h_m, z_stub), h_m)) / (2.0 * math.pi)
+    feed = max(2.0 * h_m, 3e-3)
+    comps: list[dict] = []
+    sections = [_line_sec(eps_r, h_m, 50.0, feed, tan_delta, f0)]
+    for k in range(1, n + 1):
+        c_k = c_load - cc[k - 1] - cc[k]
+        if c_k <= 0.0:
+            raise ValueError(
+                f"coupling caps exceed the loading capacitance at node "
+                f"{k}; reduce bandwidth, theta0, or z_stub")
+        sections.append({"kind": "gap", "c_f": float(cc[k - 1]),
+                         "w_m": float(w50),
+                         "gap_m": float(_gap_from_c(cc[k - 1], w50, h_m,
+                                                    eps_r))})
+        _add_comp(comps, "C", cc[k - 1], "series")
+        sections.append(_stub_sec("short_stub", eps_r, h_m, float(z_stub),
+                                  ell_st, tan_delta, f0))
+        sections.append({"kind": "shunt_c", "c_f": float(c_k)})
+        _add_comp(comps, "C", c_k, "shunt")
+    sections.append({"kind": "gap", "c_f": float(cc[n]), "w_m": float(w50),
+                     "gap_m": float(_gap_from_c(cc[n], w50, h_m, eps_r))})
+    _add_comp(comps, "C", cc[n], "series")
+    sections.append(_line_sec(eps_r, h_m, 50.0, feed, tan_delta, f0))
+    d = _fill("bpf", proto, n, f0, float(f_lo), float(f_hi), eps_r, h_m,
+              tan_delta, ripple_db, g, sections,
+              {"fbw": float(delta), "theta0_deg": float(theta0_deg),
+               "z_stub_ohm": float(z_stub),
+               "j_y0": [float(x / y0) for x in j]}, topo="c_shunt")
+    d["components"] = comps
+    return d
+
+
+def design_rc(kind: str = "lpf", f_c: float = 1e3, n: int = 3,
+              z0: float = 50.0, scale: float = 10.0, eps_r: float = 4.4,
+              h_m: float = 1.6e-3, tan_delta: float = 0.02) -> dict:
+    """Passive RC ladder (audio/LF), Butterworth-staged 1st-order sections.
+
+    n cascaded RC stages with per-stage corner
+
+        f_s = f_c / √(2^{1/n} − 1)
+
+    so the cascade sits −3.01 dB at f_c and rolls off −20n dB/decade.
+    Stage impedances scale ×`scale` per stage (R_k = Z₀·scale^{k−1},
+    C_k = 1/(2π f_s R_k)) to limit inter-stage loading.  LPF stage =
+    series R + shunt C; HPF stage = series C + shunt R.
+
+    Honest approximation: a *passive* RC ladder has only real poles and
+    cannot reproduce true Butterworth complex pole pairs; stage loading
+    shifts the corners further.  The taper bounds inter-stage loading
+    to ~10 % between stages 1…n−1, but the Z₀ terminations themselves
+    load the ladder: measured at n=3, ×10 in a 50 Ω environment the
+    LPF corner lands ≈ 25 % low (and DC insertion is large — the series
+    R's divide into the 50 Ω load), while the HPF corner runs high
+    because the load parallels the final shunt R (use scale ≈ 1–2 for
+    HPF, or active stages for real corners).  The ABCD sweep shows the
+    real loaded response, Z₀ source and load included.
+    """
+    kind = kind.lower()
+    if kind not in ("lpf", "hpf"):
+        raise ValueError("design_rc supports lpf/hpf only")
+    g = prototype_g("butterworth", n)
+    f_s = float(f_c) / math.sqrt(2.0 ** (1.0 / int(n)) - 1.0)
+    comps: list[dict] = []
+    sections: list[dict] = []
+    for k in range(1, n + 1):
+        r_k = float(z0) * float(scale) ** (k - 1)
+        c_k = 1.0 / (2.0 * math.pi * f_s * r_k)
+        if kind == "lpf":
+            sections.append({"kind": "series_r", "r_ohm": r_k})
+            _add_comp(comps, "R", r_k, "series")
+            sections.append({"kind": "shunt_c", "c_f": c_k})
+            _add_comp(comps, "C", c_k, "shunt")
+        else:
+            sections.append({"kind": "series_c", "c_f": c_k})
+            _add_comp(comps, "C", c_k, "series")
+            sections.append({"kind": "shunt_r", "r_ohm": r_k})
+            _add_comp(comps, "R", r_k, "shunt")
+    flo, fhi = ((0.0, float(f_c)) if kind == "lpf"
+                else (float(f_c), 4.0 * float(f_c)))
+    d = _fill(kind, "butterworth", n, float(f_c), flo, fhi, eps_r, h_m,
+              tan_delta, 0.0, g, sections,
+              {"il_est_db": 0.0, "z0": float(z0),
+               "stage_corner_hz": f_s, "stage_scale": float(scale)},
+              topo="rc")
+    d["components"] = comps
+    return d
+
+
+def design_crc(f_c: float = 1e3, n: int = 2, z0: float = 50.0,
+               scale: float = 10.0, eps_r: float = 4.4, h_m: float = 1.6e-3,
+               tan_delta: float = 0.02) -> dict:
+    """CRC π ladder (supply/audio smoothing LPF): C–(R–C)×n.
+
+    A shunt C at every node with a series R between nodes: n series
+    resistors and n+1 capacitors.  Same staged-corner rule as
+    `design_rc` with n+1 poles (f_s = f_c/√(2^{1/(n+1)} − 1)),
+    R_k = Z₀·scale^{k−1}, C_k = 1/(2π f_s R_k) with each C scaled
+    alongside its following R.  The series R damps the π sections (no
+    peaking).  Passive real-pole approximation — see `design_rc`.
+    """
+    n = int(n)
+    g = prototype_g("butterworth", n + 1)
+    f_s = float(f_c) / math.sqrt(2.0 ** (1.0 / (n + 1)) - 1.0)
+    comps: list[dict] = []
+    sections: list[dict] = []
+    for k in range(1, n + 2):
+        r_k = float(z0) * float(scale) ** (k - 1)
+        c_k = 1.0 / (2.0 * math.pi * f_s * r_k)
+        sections.append({"kind": "shunt_c", "c_f": c_k})
+        _add_comp(comps, "C", c_k, "shunt")
+        if k <= n:
+            sections.append({"kind": "series_r", "r_ohm": r_k})
+            _add_comp(comps, "R", r_k, "series")
+    d = _fill("lpf", "butterworth", n + 1, float(f_c), 0.0, float(f_c),
+              eps_r, h_m, tan_delta, 0.0, g, sections,
+              {"il_est_db": 0.0, "z0": float(z0),
+               "stage_corner_hz": f_s, "stage_scale": float(scale)},
+              topo="crc")
+    d["components"] = comps
+    return d
+
+
+def design_rl(kind: str = "lpf", f_c: float = 1e3, n: int = 3,
+              z0: float = 50.0, scale: float = 10.0, eps_r: float = 4.4,
+              h_m: float = 1.6e-3, tan_delta: float = 0.02) -> dict:
+    """Passive RL ladder (audio/LF).  Per-stage corner f_c = R/(2πL).
+
+    LPF stage = series L + shunt R; HPF stage = series R + shunt L,
+    with staged corners f_s = f_c/√(2^{1/n} − 1) and L_k = R_k/(2π f_s),
+    R_k = Z₀·scale^{k−1}.  The resistors are real loss elements — the
+    ABCD sweep shows the true insertion loss.  Same passive real-pole
+    staging approximation as `design_rc`.
+    """
+    kind = kind.lower()
+    if kind not in ("lpf", "hpf"):
+        raise ValueError("design_rl supports lpf/hpf only")
+    g = prototype_g("butterworth", n)
+    f_s = float(f_c) / math.sqrt(2.0 ** (1.0 / int(n)) - 1.0)
+    comps: list[dict] = []
+    sections: list[dict] = []
+    for k in range(1, n + 1):
+        r_k = float(z0) * float(scale) ** (k - 1)
+        l_k = r_k / (2.0 * math.pi * f_s)
+        if kind == "lpf":
+            sections.append({"kind": "series_l", "l_h": l_k})
+            _add_comp(comps, "L", l_k, "series")
+            sections.append({"kind": "shunt_r", "r_ohm": r_k})
+            _add_comp(comps, "R", r_k, "shunt")
+        else:
+            sections.append({"kind": "series_r", "r_ohm": r_k})
+            _add_comp(comps, "R", r_k, "series")
+            sections.append({"kind": "shunt_l", "l_h": l_k})
+            _add_comp(comps, "L", l_k, "shunt")
+    flo, fhi = ((0.0, float(f_c)) if kind == "lpf"
+                else (float(f_c), 4.0 * float(f_c)))
+    d = _fill(kind, "butterworth", n, float(f_c), flo, fhi, eps_r, h_m,
+              tan_delta, 0.0, g, sections,
+              {"il_est_db": 0.0, "z0": float(z0),
+               "stage_corner_hz": f_s, "stage_scale": float(scale)},
+              topo="rl")
+    d["components"] = comps
+    return d
+
+
 def design_filter(kind: str, f_c: float | None = None,
                   f_lo: float | None = None, f_hi: float | None = None,
                   n: int = 5, proto: str = "butterworth",
                   eps_r: float = 4.4, h_m: float = 1.6e-3,
-                  tan_delta: float = 0.02, ripple_db: float = 0.1) -> dict:
+                  tan_delta: float = 0.02, ripple_db: float = 0.1,
+                  topo: str | None = None, z0: float = 50.0) -> dict:
+    """Dispatch on (kind, topo).  `topo` defaults to TOPOS[kind][0] —
+    the distributed microstrip realisation — so existing calls are
+    unchanged.  `z0` is the system impedance (lumped/RC/RL ladders).
+    """
     kind = kind.lower()
     if kind not in KINDS:
         raise ValueError(f"unknown filter kind {kind!r}; expected {KINDS}")
+    topo = TOPOS[kind][0] if topo is None else topo.lower()
+    if topo not in TOPOS[kind]:
+        raise ValueError(
+            f"topology {topo!r} not available for {kind}; "
+            f"expected one of {TOPOS[kind]}")
     if kind in ("lpf", "hpf"):
         if f_c is None:
             raise ValueError(f"{kind} requires f_c")
+        if topo == "lc":
+            return design_lc(kind, f_c=f_c, n=n, proto=proto,
+                             ripple_db=ripple_db, z0=z0, eps_r=eps_r,
+                             h_m=h_m, tan_delta=tan_delta)
+        if topo == "qw_tl":
+            return design_qw_tl("lpf", f_c=f_c, n=n, proto=proto,
+                                ripple_db=ripple_db, z0=z0, eps_r=eps_r,
+                                h_m=h_m, tan_delta=tan_delta)
+        if topo == "rc":
+            return design_rc(kind, f_c=f_c, n=n, z0=z0, eps_r=eps_r,
+                             h_m=h_m, tan_delta=tan_delta)
+        if topo == "crc":
+            return design_crc(f_c=f_c, n=n, z0=z0, eps_r=eps_r,
+                              h_m=h_m, tan_delta=tan_delta)
+        if topo == "rl":
+            return design_rl(kind, f_c=f_c, n=n, z0=z0, eps_r=eps_r,
+                             h_m=h_m, tan_delta=tan_delta)
         fn = design_lpf if kind == "lpf" else design_hpf
         return fn(f_c, n=n, proto=proto, eps_r=eps_r, h_m=h_m,
                   tan_delta=tan_delta, ripple_db=ripple_db)
@@ -457,6 +1061,22 @@ def design_filter(kind: str, f_c: float | None = None,
         if f_c is None:
             raise ValueError(f"{kind} requires f_lo/f_hi or f_c + 10 % FBW")
         f_lo, f_hi = 0.95 * f_c, 1.05 * f_c
+    if topo == "lc":
+        return design_lc(kind, f_lo=f_lo, f_hi=f_hi, n=n, proto=proto,
+                         ripple_db=ripple_db, z0=z0, eps_r=eps_r, h_m=h_m,
+                         tan_delta=tan_delta)
+    if topo == "dc_lc":
+        return design_dc_lc(f_lo, f_hi, n=n, proto=proto,
+                            ripple_db=ripple_db, z0=z0, eps_r=eps_r,
+                            h_m=h_m, tan_delta=tan_delta)
+    if topo == "qw_tl":
+        return design_qw_tl("bpf", f_lo=f_lo, f_hi=f_hi, n=n, proto=proto,
+                            ripple_db=ripple_db, z0=z0, eps_r=eps_r,
+                            h_m=h_m, tan_delta=tan_delta)
+    if topo == "c_shunt":
+        return design_c_shunt(f_lo, f_hi, n=n, proto=proto,
+                              ripple_db=ripple_db, z0=z0, eps_r=eps_r,
+                              h_m=h_m, tan_delta=tan_delta)
     fn = design_bpf if kind == "bpf" else design_bsf
     nn = n if n <= 7 else 5
     return fn(f_lo, f_hi, n=nn, proto=proto, eps_r=eps_r, h_m=h_m,
@@ -544,17 +1164,19 @@ def metrics(design: dict, sw: dict | None = None) -> dict:
 
 
 def design_params(design: dict) -> dict:
-    """everythingRF digest checklist, JSON-safe."""
+    """everythingRF digest checklist, JSON-safe.  Lumped topologies add a
+    BOM-centric checklist (tolerances, inductor SRF/Q, dielectrics)."""
     d = design
-    return {
+    out = {
         "kind": d["kind"],
         "proto": d["proto"],
         "n": d["n"],
+        "topology": d.get("topo", TOPOS[d["kind"]][0]),
         "f_c_mhz": d["f_c"] / 1e6,
         "f_lo_mhz": d["f_lo"] / 1e6,
         "f_hi_mhz": d["f_hi"] / 1e6,
         "g": d["g"],
-        "z0_ohm": 50.0,
+        "z0_ohm": d.get("z0", 50.0),
         "w50_mm": d["w50_m"] * 1e3,
         "q_u": d["q_u"],
         "il_est_db": d["il_est_db"],
@@ -576,6 +1198,46 @@ def design_params(design: dict) -> dict:
         ),
         "source": SOURCE,
     }
+    if d.get("topo") in LUMPED_TOPOS:
+        out.update({
+            "bom_count": len(d.get("components") or []),
+            "tolerance_note": (
+                "prototype g-values assume exact LC — use C0G/NP0 ceramics "
+                "±1 % (no X7R in the signal path) and inductors ±2 %"
+            ),
+            "inductor_note": (
+                "inductor SRF > 3× f_hi and Q > 40 at f_c; shielded SMD or "
+                "air-core — DCR/SRF, not the microstrip IL_est, set the "
+                "real insertion loss (il_est_db = 0 for lumped)"
+            ),
+            "mounting_note": (
+                "0805 pad cascade, shunt elements via'd to a solid ground; "
+                "keep shunt drops short — trace L adds to the shunt arm"
+            ),
+        })
+        if d["topo"] in ("rc", "crc", "rl"):
+            out["staging_note"] = (
+                "passive RC/RL ladder: staged real-pole corners approximate "
+                "a Butterworth −3 dB point but cannot form complex pole "
+                "pairs — skirts are softer than an active/LC Butterworth of "
+                "the same order; the sweep shows the true loaded response"
+            )
+        elif d["topo"] == "dc_lc":
+            out["staging_note"] = (
+                "capacitive J-inverters are first-order in the coupling "
+                "(J ≈ ω₀C_c) — accurate for Δ ≲ 0.2"
+            )
+    elif d.get("topo") == "qw_tl":
+        out["commensurate_note"] = (
+            "Richards/Kuroda commensurate lines; impedances clamped to "
+            f"[{Z_LOW:.0f}, 150] Ω for microstrip — "
+            + ("clamp ACTIVE, response detuned (see z_clamped)"
+               if d.get("z_clamped") else "no clamping needed"))
+    elif d.get("topo") == "c_shunt":
+        out["commensurate_note"] = (
+            "combline-style loaded stubs; gap-capacitor J-inverters are "
+            "first-order in the coupling (J ≈ ω₀C_c)")
+    return out
 
 
 # --- layout (mm) -------------------------------------------------------------
@@ -588,6 +1250,8 @@ def _rect(x, y, w, h, layer="F.Cu") -> dict:
 
 def layout_mm(design: dict) -> dict:
     """Copper rectangles + pads in mm, origin at the filter centre."""
+    if design.get("topo") in LUMPED_TOPOS:
+        return _layout_lumped(design)
     kind = design["kind"]
     if kind == "bpf":
         return _layout_hairpin(design)
@@ -597,6 +1261,8 @@ def layout_mm(design: dict) -> dict:
 def _layout_cascade(design: dict) -> dict:
     """Horizontal cascade of line/stub/gap sections (LPF/HPF/BSF)."""
     rects, vias, x = [], [], 0.0
+    extra_pads = []
+    n_shunt = 0
     y_stub_sign = 1.0
     max_y = 0.0
     for sec in design["sections"]:
@@ -614,6 +1280,16 @@ def _layout_cascade(design: dict) -> dict:
                 vias.append({"x": x, "y": y_stub_sign * ell, "d": max(w, 0.6)})
             max_y = max(max_y, ell)
             y_stub_sign *= -1.0
+        elif sec["kind"].startswith("shunt_"):
+            # lumped shunt element (e.g. combline loading C): 0805 drop
+            # to a via'd ground point
+            n_shunt += 1
+            extra_pads.append({"name": f"S{n_shunt}a", "x": x, "y": 0.0,
+                               "w": 1.0, "h": 1.3})
+            extra_pads.append({"name": f"S{n_shunt}b", "x": x, "y": 2.0,
+                               "w": 1.0, "h": 1.3})
+            rects.append(_rect(x, 3.0, 0.5, 2.0))
+            vias.append({"x": x, "y": 3.8, "d": 0.8})
         elif sec["kind"] == "gap":
             g = max(sec.get("gap_m", 0.2e-3) * 1e3, 0.15)
             x += g
@@ -625,13 +1301,65 @@ def _layout_cascade(design: dict) -> dict:
         r["x"] -= shift
     for v in vias:
         v["x"] -= shift
+    for p in extra_pads:
+        p["x"] -= shift
     w50 = design["w50_m"] * 1e3
     pads = [
         {"name": "1", "x": -shift, "y": 0.0, "w": max(w50, 1.0), "h": max(w50, 1.0)},
         {"name": "2", "x": x - shift, "y": 0.0, "w": max(w50, 1.0), "h": max(w50, 1.0)},
+        *extra_pads,
     ]
     return _bbox({"rects": rects, "pads": pads, "vias": vias,
                   "kind": design["kind"]})
+
+
+def _layout_lumped(design: dict) -> dict:
+    """0805 SMD pad cascade for lumped designs.
+
+    Series components sit inline along x as pad pairs (1.0 × 1.3 mm
+    pads, 2.0 mm pitch = 0805); shunt components drop to an F.Cu GND
+    strip below (via'd to the B.Cu plane of the wrapping board).
+    Driven by the design's `components` BOM so pads map 1:1 to refs.
+    """
+    comps = design.get("components") or []
+    pitch, gap, gnd_y = 2.0, 1.5, 3.6
+    pad_w, pad_h = 1.0, 1.3
+    lead = 2.0
+    items = []
+    cx = lead
+    for c in comps:
+        items.append((c, cx))
+        cx += (pitch + gap) if c["role"] == "series" else gap
+    end = max(cx - gap + lead, 2.0 * lead)
+    rects = [_rect(end / 2.0, 0.0, end, 0.5),          # series track
+             _rect(end / 2.0, gnd_y, end, 1.0)]        # GND strip
+    pads, vias = [], []
+    n_via = max(1, int(end // 4.0))
+    for i in range(n_via + 1):
+        vias.append({"x": end * i / n_via, "y": gnd_y, "d": 0.8})
+    for c, x0 in items:
+        if c["role"] == "series":
+            pads.append({"name": f"{c['ref']}.1", "x": x0, "y": 0.0,
+                         "w": pad_w, "h": pad_h})
+            pads.append({"name": f"{c['ref']}.2", "x": x0 + pitch, "y": 0.0,
+                         "w": pad_w, "h": pad_h})
+        else:
+            pads.append({"name": f"{c['ref']}.1", "x": x0, "y": 0.0,
+                         "w": pad_w, "h": pad_h})
+            pads.append({"name": f"{c['ref']}.2", "x": x0, "y": 2.0,
+                         "w": pad_w, "h": pad_h})
+            rects.append(_rect(x0, (2.0 + gnd_y) / 2.0, 0.5, gnd_y - 2.0))
+    pads.append({"name": "1", "x": 0.0, "y": 0.0, "w": 1.5, "h": 1.5})
+    pads.append({"name": "2", "x": end, "y": 0.0, "w": 1.5, "h": 1.5})
+    shift = end / 2.0
+    for r in rects:
+        r["x"] -= shift
+    for p in pads:
+        p["x"] -= shift
+    for v in vias:
+        v["x"] -= shift
+    return _bbox({"rects": rects, "pads": pads, "vias": vias,
+                  "kind": design["kind"], "topo": design.get("topo")})
 
 
 def _layout_hairpin(design: dict) -> dict:
@@ -941,5 +1669,110 @@ if __name__ == "__main__":
     print(f"PASS  filter_sa LPF n=3 (40 steps): best_E={info['best_E']:.3f}, "
           f"IL={best['terms']['il_db']:.2f} dB, "
           f"RL={best['terms']['rl_db']:.1f} dB [{info['elapsed_s']:.2f} s]")
+
+    # --- lumped / commensurate topologies --------------------------------
+
+    def _s21(d, f):
+        a = abcd_cascade(d["sections"], f)
+        return db20(abcd_to_s(a, d.get("z0", 50.0))[1])
+
+    # exact Butterworth n=3 values: z0 = 1 Ω, ωc = 1 rad/s →
+    # series L1 = g1 Z0/ωc = 1 H, shunt C2 = g2/(Z0 ωc) = 2 F, L3 = 1 H
+    d1 = design_lc("lpf", f_c=1.0 / (2.0 * math.pi), n=3, z0=1.0)
+    assert d1["topo"] == "lc" and len(d1["components"]) == 3
+    s = d1["sections"]
+    assert s[0]["kind"] == "series_l" and abs(s[0]["l_h"] - 1.0) < 1e-12
+    assert s[1]["kind"] == "shunt_c" and abs(s[1]["c_f"] - 2.0) < 1e-12
+    assert s[2]["kind"] == "series_l" and abs(s[2]["l_h"] - 1.0) < 1e-12
+    print("PASS  lc LPF n=3 exact: L1=1 H, C2=2 F, L3=1 H (z0=1 Ω, ωc=1)")
+
+    # lc behavioral: n=5 Butterworth skirts ±30 dB at 2×/0.5× corner
+    lc_lpf = design_lc("lpf", f_c=1e9, n=5)
+    assert _s21(lc_lpf, 0.5e9) > -1.0 and _s21(lc_lpf, 2.0e9) < -20.0
+    lc_hpf = design_lc("hpf", f_c=1e9, n=5)
+    assert _s21(lc_hpf, 2.0e9) > -1.0 and _s21(lc_hpf, 0.5e9) < -20.0
+    print(f"PASS  lc LPF/HPF n=5 @1 GHz: "
+          f"{_s21(lc_lpf, 0.5e9):.2f}/{_s21(lc_lpf, 2e9):.1f} dB, "
+          f"{_s21(lc_hpf, 2e9):.2f}/{_s21(lc_hpf, 0.5e9):.1f} dB")
+
+    # lc bpf/bsf around f0 = √(f_lo f_hi)
+    f0 = math.sqrt(2.3e9 * 2.6e9)
+    lc_bpf = design_lc("bpf", f_lo=2.3e9, f_hi=2.6e9, n=3)
+    assert _s21(lc_bpf, f0) > -1.0 and _s21(lc_bpf, 1.5e9) < -20.0
+    f0b = math.sqrt(2.4e9 * 2.5e9)
+    lc_bsf = design_lc("bsf", f_lo=2.4e9, f_hi=2.5e9, n=3)
+    assert _s21(lc_bsf, f0b) < -15.0 and _s21(lc_bsf, 1.5e9) > -1.0
+    print(f"PASS  lc BPF/BSF n=3: BPF S21(f0)={_s21(lc_bpf, f0):.2f} dB, "
+          f"BSF notch {_s21(lc_bsf, f0b):.1f} dB")
+
+    # dc_lc / c_shunt: passband centered at f0, stopband rejection
+    dl = design_dc_lc(2.3e9, 2.6e9, n=3)
+    assert _s21(dl, f0) > -2.0 and _s21(dl, 1.5e9) < -10.0
+    cs = design_c_shunt(2.3e9, 2.6e9, n=3)
+    assert _s21(cs, f0) > -4.0 and _s21(cs, 1.5e9) < -10.0
+    print(f"PASS  dc_lc/c_shunt BPF n=3: S21(f0)={_s21(dl, f0):.2f}/"
+          f"{_s21(cs, f0):.2f} dB, S21(1.5G)={_s21(dl, 1.5e9):.1f}/"
+          f"{_s21(cs, 1.5e9):.1f} dB")
+
+    # qw_tl: Kuroda LPF passes/rejects; commensurate BPF peaks at f0
+    qw = design_qw_tl("lpf", f_c=1e9, n=5)
+    assert _s21(qw, 0.5e9) > -2.0 and _s21(qw, 1.5e9) < -15.0
+    qb = design_qw_tl("bpf", f_lo=2.3e9, f_hi=2.6e9, n=3)
+    assert _s21(qb, f0) > _s21(qb, 0.8 * f0) + 6.0
+    assert _s21(qb, f0) > _s21(qb, 1.25 * f0) + 6.0
+    print(f"PASS  qw_tl: LPF {_s21(qw, 0.5e9):.2f}/{_s21(qw, 1.5e9):.1f} dB "
+          f"(z_clamped={qw['z_clamped']}), BPF f0 {_s21(qb, f0):.2f} dB "
+          f"(z_clamped={qb['z_clamped']})")
+
+    # RC ladder: −3 dB point within ±35 % of target (loading pulls it
+    # low — documented); HPF smoke (corner runs high in 50 Ω, see
+    # design_rc docstring)
+    rc = design_rc("lpf", f_c=1e3, n=3)
+    sw_rc = sweep(rc, f_lo=10.0, f_hi=2e5, n_points=801)
+    s_rc = np.asarray(sw_rc["s21_db"])
+    f_rc = np.asarray(sw_rc["f_hz"])
+    i3 = int(np.argmin(np.abs(s_rc - (s_rc[0] - 3.01))))
+    assert abs(f_rc[i3] / 1e3 - 1.0) < 0.35, f_rc[i3]
+    rch = design_rc("hpf", f_c=1e3, n=3)
+    assert _s21(rch, 1e5) > _s21(rch, 1e3) > _s21(rch, 10.0)
+    print(f"PASS  rc LPF n=3 @1 kHz: −3 dB at {f_rc[i3] / 1e3:.3f} kHz "
+          f"(±35 % tol; DC level {s_rc[0]:.1f} dB), HPF monotone")
+
+    # crc / rl smoke: build, sweep finite, low-pass behavior
+    crc = design_crc(f_c=1e3, n=2)
+    assert _s21(crc, 1e4) < _s21(crc, 100.0)
+    rl = design_rl("lpf", f_c=1e3, n=3)
+    assert _s21(rl, 1e4) < _s21(rl, 100.0)
+    rlh = design_rl("hpf", f_c=1e3, n=3)
+    assert _s21(rlh, 1e5) > _s21(rlh, 10.0)
+    assert all(np.isfinite(sweep(d)["s21_db"]).all()
+               for d in (crc, rl, rlh))
+    print(f"PASS  crc/rl smoke: CRC 100 Hz→10 kHz {_s21(crc, 100.0):.1f}→"
+          f"{_s21(crc, 1e4):.1f} dB, RL {_s21(rl, 100.0):.1f}→"
+          f"{_s21(rl, 1e4):.1f} dB")
+
+    # lumped layout + preview + JSON safety
+    lay = layout_mm(lc_lpf)
+    prev = preview_from_layout(lay)
+    assert prev["prims"] and lay["vias"] and len(lay["pads"]) >= 2 * 5 + 2
+    import json
+    json.dumps(design_public(lc_lpf))
+    lay_cs = layout_mm(cs)          # distributed + lumped loading caps
+    assert preview_from_layout(lay_cs)["prims"]
+    print(f"PASS  lumped layout/preview: {len(lay['pads'])} pads, "
+          f"{len(lay['vias'])} vias; design_public JSON-safe")
+
+    # topo validation + defaults keep existing behavior
+    assert design_filter("lpf", f_c=1e9)["topo"] == "stepped"
+    assert design_filter("hpf", f_c=1e9)["topo"] == "stub"
+    assert design_filter("bpf", f_lo=2.3e9, f_hi=2.6e9)["topo"] == "hairpin"
+    assert design_filter("bsf", f_lo=2.4e9, f_hi=2.5e9)["topo"] == "stub"
+    try:
+        design_filter("lpf", f_c=1e9, topo="bogus")
+        raise AssertionError("bad topo accepted")
+    except ValueError as e:
+        assert "expected one of" in str(e)
+    print("PASS  topo validation: defaults stepped/stub/hairpin/stub, "
+          "bad topo raises")
 
     print("rf_filter self-check: all checks passed")
