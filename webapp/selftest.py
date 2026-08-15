@@ -246,6 +246,11 @@ def selftest() -> int:
            "micromag_sim.js missing flux-tile panel")
     print("PASS GET /api/sim/flux-tiles + FLUX TILES panel")
 
+    from ..micromag import _e_tile as _et
+    expect(_et(H8, 1.0) == 0.0, "E_tile(H8) != 0")
+    expect(_et(_syl(16), 1.0) < 0.2, "E_tile(H16) too large")
+    print(f"PASS E_tile prior (H8=0, H16={_et(_syl(16), 1.0):.3f})")
+
     # ------------------------------------- Item 2: micromag goal attraction
     from ..hadamard import verify as _verify
     from ..micromag import micromag_sa
@@ -789,6 +794,31 @@ def selftest() -> int:
     expect('data-tab="filter"' in r.text, "index filter tab button")
     print("PASS filter static integrity")
 
+    r = client.post("/api/materials/design", json={
+        "kind": "cloth", "order": 16, "start": "sylvester", "pitch_mm": 1.0})
+    expect(r.status_code == 200, f"materials cloth: {r.status_code} {r.text[:200]}")
+    md = r.json()
+    expect(md["stats"]["warp_runs"] > 0 and md["preview"]["prims"], "cloth empty")
+    expect(md["stats"].get("field") == "flux P=2W-1", "cloth not flux-polarity")
+    expect(md["stats"]["sites_zero"] > 0, "cloth missing 0-polarity sites")
+    expect(md["tiles"]["kronecker_h8"], "cloth H16 not 4-tile")
+    r = client.post("/api/materials/design", json={
+        "kind": "touchpad", "order": 8, "start": "sylvester"})
+    expect(r.status_code == 200 and r.json()["stats"]["n_caps"] > 0, "touchpad caps")
+    r = client.post("/api/materials/design", json={
+        "kind": "metamaterial", "order": 16, "start": "sylvester"})
+    expect(r.status_code == 200 and r.json()["stats"]["n_atoms"] == 4, "meta atoms")
+    r = client.post("/api/materials/kicad", json={
+        "kind": "cloth", "order": 8, "start": "sylvester"})
+    mk = r.json()
+    expect(r.status_code == 200 and any(f.endswith(".kicad_mod") for f in mk["files"]),
+           "materials kicad")
+    r = client.get("/js/tabs/materials.js")
+    expect(r.status_code == 200 and "MATERIALS LAB" in r.text, "materials.js tab")
+    r = client.get("/")
+    expect('data-tab="materials"' in r.text, "index materials tab")
+    print(f"PASS materials lab (cloth/touch/meta + kicad {len(mk['files'])} files)")
+
     # ------------------------------------------------ Phase 4.5: HUD themes
     r = client.get("/css/themes.css")
     expect(r.status_code == 200 and '[data-theme="dmg"]' in r.text, "themes.css dmg")
@@ -1081,6 +1111,8 @@ def selftest() -> int:
         ("POST", "/api/search", {"engine": "maxdet", "order": 8, "budget_s": 2}),
         ("POST", "/api/sim/micromag", {"order": 8, "budget_s": 2, "start": "sylvester"}),
         ("GET", "/api/sim/flux-tiles?order=16&start=sylvester", None),
+        ("POST", "/api/materials/design", {"kind": "cloth", "order": 8, "start": "sylvester"}),
+        ("POST", "/api/materials/kicad", {"kind": "cloth", "order": 8, "start": "sylvester"}),
         ("POST", "/api/hoa/speakers", {"preset": "ring8", "order": 3}),
         ("POST", "/api/hoa/scene", {"sources": [{"az": 30, "el": 10, "freq": 440}],
                                     "order": 3, "duration": 0.05, "wav": False}),
