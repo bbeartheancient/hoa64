@@ -25,7 +25,7 @@ let waveChart; // unified waveform strip chart (E/E_DEM/E_EXCH/E_ANIS/T)
 let ws = null;
 let currentJob = null;
 let fxCanvas, fxShader, fluxShader, fluxShaderCanvas, fxRaf = null; // bg layers
-let firstE = null, latestE = null;
+let firstE = null, latestE = null, lastFluxTiles = null, fluxInfoEl;
 let layer = "energy"; // active field layer: matrix | energy | grad | flux
 const layerCache = {}; // name → {canvas, ctx, has} pristine PNG per layer
 let layerBtns = {};
@@ -131,6 +131,30 @@ function selectLayer(name) {
   showLayer();
 }
 
+function renderFluxTiles(ft) {
+  if (!fluxInfoEl) return;
+  if (!ft) {
+    fluxInfoEl.replaceChildren(statRow("flux tiles", "start a run, or [READ TILES]"));
+    return;
+  }
+  const rows = [];
+  if (ft.n_tiles != null)
+    rows.push(statRow("unique tiles", `${ft.n_tiles} × ${ft.tile}×${ft.tile}  /  ${ft.n_blocks} blocks`,
+      ft.kronecker_h8 ? "good" : ""));
+  if (typeof ft.h8_agree === "number")
+    rows.push(statRow("H.8 agree", `${(ft.h8_agree * 100).toFixed(1)}%`,
+      ft.kronecker_h8 ? "good" : ""));
+  if (Array.isArray(ft.counts))
+    rows.push(statRow("tile counts", ft.counts.join(" / ")));
+  if (ft.scales)
+    rows.push(statRow("scales", Object.entries(ft.scales).map(([s, k]) => `${k}×${s}`).join("  ")));
+  if (ft.nested) rows.push(statRow("nested", "top-left = H.n/2 flux", "good"));
+  if (ft.mean_w != null) rows.push(statRow("mean W", Number(ft.mean_w).toFixed(3)));
+  if (ft.n_tiles == null)
+    rows.push(statRow("flux tiles", `n=${ft.n} not divisible by ${ft.tile}`));
+  fluxInfoEl.replaceChildren(...(rows.length ? rows : [statRow("flux tiles", "—")]));
+}
+
 function resetRun() {
   waveChart.clear();
   statsEl.replaceChildren();
@@ -138,6 +162,8 @@ function resetRun() {
   exportBtn.style.display = "none";
   firstE = null;
   latestE = null;
+  lastFluxTiles = null;
+  renderFluxTiles(null);
   for (const c of Object.values(layerCache)) c.has = false; // stale layers drop
   showLayer();
 }
@@ -262,6 +288,10 @@ function handleFrame(d) {
     if (d.field_png_b64) cacheDraw("energy", d.field_png_b64);
     if (d.grad_png_b64) cacheDraw("grad", d.grad_png_b64);
     if (d.flux_png_b64) cacheDraw("flux", d.flux_png_b64);
+    if (d.flux_tiles) {
+      lastFluxTiles = d.flux_tiles;
+      renderFluxTiles(lastFluxTiles);
+    }
     if (d.E !== undefined || d.T !== undefined) {
       // one sample across all waveform series; the chart keeps only the
       // keys present (E_exch/E_anis ride along whenever the frame has them)
@@ -286,6 +316,18 @@ function handleFrame(d) {
       if (typeof d.goal_agree === "number")
         bits.push(`agree ${(d.goal_agree * 100).toFixed(1)}%`);
       if (d.elapsed_s !== undefined) bits.push(`${d.elapsed_s.toFixed(1)}s`);
+      if (lastFluxTiles && lastFluxTiles.n_tiles != null) {
+        bits.push(`tiles ${lastFluxTiles.n_tiles}×${lastFluxTiles.tile}`);
+        if (lastFluxTiles.scales) {
+          const extra = Object.entries(lastFluxTiles.scales)
+            .filter(([s]) => s !== String(lastFluxTiles.tile))
+            .map(([s, k]) => `${k}×${s}`)
+            .slice(0, 3);
+          if (extra.length) bits.push(extra.join(" "));
+        }
+        if (typeof lastFluxTiles.h8_agree === "number")
+          bits.push(`H8 ${(lastFluxTiles.h8_agree * 100).toFixed(0)}%`);
+      }
       statusEl.textContent = bits.join(" · ");
     }
     return;
@@ -319,12 +361,21 @@ async function finishRun() {
       ];
       if (s.det_log10 !== undefined && s.det_log10 !== null)
         rows.push(statRow("det_log10", s.det_log10.toFixed(2)));
+      const ft = r.flux_tiles || lastFluxTiles;
+      if (ft) renderFluxTiles(ft);
+      if (ft && ft.n_tiles != null) {
+        rows.push(statRow("flux tiles", `${ft.n_tiles} unique ${ft.tile}×${ft.tile} / ${ft.n_blocks} blocks`));
+        if (typeof ft.h8_agree === "number")
+          rows.push(statRow("H.8 tile agree", `${(ft.h8_agree * 100).toFixed(1)}%`,
+            ft.kronecker_h8 ? "good" : ""));
+      }
       statsEl.replaceChildren(...rows);
       exportBtn.style.display = "";
       exportBtn.disabled = false;
     } else {
       msg(`no Hadamard found (best_E=${r.best_E ?? "?"})`, "error");
       statsEl.replaceChildren(statRow("ok", false, "bad"), statRow("best_E", r.best_E ?? "?"));
+      if (lastFluxTiles) renderFluxTiles(lastFluxTiles);
     }
   } catch (e) {
     msg(`result fetch failed: ${e.message}`, "error");
@@ -334,6 +385,31 @@ async function finishRun() {
 function numVal(id, fallback) {
   const v = parseFloat(document.getElementById(id).value);
   return Number.isFinite(v) ? v : fallback;
+}
+
+async function doReadTiles() {
+  const order = parseInt(document.getElementById("sim-order").value, 10);
+  let start = document.getElementById("sim-start").value;
+  if (start === "random") start = "sylvester";
+  msg("reading flux tiles…");
+  try {
+    const d = await api(`/api/sim/flux-tiles?order=${order}&start=${start}`);
+    lastFluxTiles = d.flux_tiles;
+    renderFluxTiles(lastFluxTiles);
+    if (d.flux_png_b64) {
+      cacheDraw("flux", d.flux_png_b64);
+      selectLayer("flux");
+    }
+    const t = d.flux_tiles || {};
+    msg(
+      t.n_tiles != null
+        ? `flux tiles: ${t.n_tiles} unique ${t.tile}×${t.tile} · H8 ${((t.h8_agree || 0) * 100).toFixed(0)}%`
+        : `flux tiles: n=${t.n} (no ${t.tile}-block tiling)`,
+      "ok"
+    );
+  } catch (e) {
+    msg(`flux tiles failed: ${e.message}`, "error");
+  }
 }
 
 async function doStart() {
@@ -466,6 +542,7 @@ export function init(container) {
       "div",
       { class: "btn-row" },
       el("button", { class: "btn", id: "sim-launch" }, "Start simulation"),
+      el("button", { class: "btn", id: "sim-flux-read" }, "Read flux tiles"),
       (cancelBtn = el("button", { class: "btn", disabled: true }, "Cancel")),
       (exportBtn = el("button", { class: "btn", style: "display:none" }, "Export to library"))
     ),
@@ -562,7 +639,10 @@ export function init(container) {
     { class: "panel" },
     el("h2", {}, "Live fields"),
     layerRow,
-    el("div", { class: "panel-row" }, matrix.node, fieldCell)
+    el("div", { class: "panel-row" }, matrix.node, fieldCell),
+    el("h2", {}, "Flux tiles (H.8 catalog)"),
+    el("table", { class: "stats" }, (fluxInfoEl = el("tbody", {},
+      el("tr", {}, el("td", { class: "dim" }, "idle — [READ FLUX TILES] or start a run")))))
   );
   initFx(fieldCell);
   for (const [k, b] of Object.entries(layerBtns)) b.style.opacity = k === layer ? "1" : "0.45";
@@ -577,6 +657,7 @@ export function init(container) {
   );
 
   document.getElementById("sim-launch").addEventListener("click", doStart);
+  document.getElementById("sim-flux-read").addEventListener("click", doReadTiles);
   cancelBtn.addEventListener("click", doCancel);
   exportBtn.addEventListener("click", doExport);
 

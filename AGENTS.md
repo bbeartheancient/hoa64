@@ -302,7 +302,12 @@ channel count, and FOA is a normalized H4.
   `sys.path.insert(0, parent)` then `from hoa64....` imports):
   `evolve.py` (gap-filling daemon, constructions only), `search_daemon.py`
   (aggressive: tries all engines on every gap), `micromag.py` (simulated
-  annealing + swap moves, `flux_map` domain-wall density viz, optional
+  annealing + swap moves, `flux_map` domain-wall density viz,
+  `flux_tiles` H.8 tessellation catalog (Sylvester / A⊗H₈ → exactly
+  four 8×8 wall tiles at every dyadic scale, Walsh placement so
+  H.256 counts 341/171/171/341 and top-left = H.128; Paley does
+  not tile; orders ≡ 4 mod 8 cannot),
+  optional
   `goal`/`lam_goal` attraction — E_goal = lam_goal per entry disagreeing
   with ±goal, sign fixed at start since global sign is gauge), `tile_search.py` (2×2 H2-cell SA),
   `rnn_hadamard.py` and `sig_predictor.py` (PyTorch LSTM fitness models),

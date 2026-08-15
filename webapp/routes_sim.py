@@ -33,13 +33,14 @@ import time
 from typing import Any
 
 import numpy as np
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from .. import micromag
 from ..hadamard import perturb, random_seed, sylvester
 from ._png import heatmap_png, matrix_png
 from .jobs import JOBS, Job, report
+from .routes_hadamard import _jsafe
 from .routes_search import (
     LIB_DIR,
     PREVIEW_EVERY,
@@ -116,6 +117,7 @@ def _sim_reporter(job: Job, order: int, field_every: int,
     throttled matrix previews, and field/gradient heatmap frames."""
     t0 = time.monotonic()
     last_preview = [0.0]
+    last_field = [True]  # force a heatmap+tiles frame on the first callback
     live = job.params["live"]
 
     def cb(stats: dict) -> None:
@@ -133,13 +135,19 @@ def _sim_reporter(job: Job, order: int, field_every: int,
                 H, lam_ex=lam_ex, lam_ani=lam_ani
             )
             frame.update(E_exch=E_exch, E_dem=E_dem, E_anis=E_anis)
+            # cheap O(n²); ride every progress frame so the FLUX TILES
+            # panel does not wait for field_every (default 2500 steps)
+            frame["flux_tiles"] = micromag.flux_tiles(H)
         report(job, **frame)
 
         if H is None:
             return
         now = time.monotonic()
         step = stats.get("step", 0)
-        if order <= FIELD_MAX and field_every > 0 and step % field_every == 0:
+        first_field = last_field[0]
+        if (order <= FIELD_MAX and field_every > 0
+                and (first_field or step % field_every == 0)):
+            last_field[0] = False
             field = micromag.site_energy(H, lam_ex=lam_ex, lam_anis=lam_ani)
             grad = micromag.energy_gradient(H)
             flux = micromag.flux_map(H)
@@ -150,6 +158,7 @@ def _sim_reporter(job: Job, order: int, field_every: int,
                 field_png_b64=base64.b64encode(heatmap_png(field, 512)).decode("ascii"),
                 grad_png_b64=base64.b64encode(heatmap_png(grad, 512)).decode("ascii"),
                 flux_png_b64=base64.b64encode(heatmap_png(flux, 512)).decode("ascii"),
+                flux_tiles=micromag.flux_tiles(H),
             )
         if order <= PREVIEW_MAX and now - last_preview[0] >= PREVIEW_EVERY:
             last_preview[0] = now
@@ -329,3 +338,39 @@ def sim_start(req: SimReq) -> dict:
         params["seed"] = req.seed
     job = JOBS.submit("micromag_sim", _run_sim, params)
     return {"job_id": job.id}
+
+
+@router.get("/sim/flux-tiles")
+def flux_tiles_get(
+    order: int = Query(..., ge=4, le=MAX_ORDER),
+    start: str = Query("sylvester"),
+) -> dict:
+    """Inspect the H.8 flux-tile catalog of a start matrix (no anneal)."""
+    if order % 4 != 0:
+        raise HTTPException(status_code=400, detail="order must be a multiple of 4")
+    if start not in ("sylvester", "library"):
+        raise HTTPException(
+            status_code=400,
+            detail="start must be 'sylvester' or 'library' (need a concrete H)",
+        )
+    if start == "sylvester":
+        H = sylvester(order)
+        if H is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"sylvester needs a power-of-2 order, got {order}",
+            )
+    else:
+        path = LIB_DIR / f"hadamard_{order}.csv"
+        if not path.is_file():
+            raise HTTPException(
+                status_code=400, detail=f"order {order} not in library",
+            )
+        H = np.loadtxt(path, delimiter=",", dtype=np.int8)
+    flux = micromag.flux_map(H)
+    return _jsafe({
+        "order": order,
+        "start": start,
+        "flux_tiles": micromag.flux_tiles(H),
+        "flux_png_b64": base64.b64encode(heatmap_png(flux, 512)).decode("ascii"),
+    })

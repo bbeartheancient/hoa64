@@ -261,11 +261,13 @@ def _package_result(job: Job, H, info: dict, label: str) -> dict:
         H = normalize(np.asarray(H, dtype=np.int8))
         job.matrix = H  # kept off the JSON result; /export re-reads it
         n = int(H.shape[0])
+        from ..micromag import flux_tiles
         return {
             "ok": True,
             "order": n,
             "engine": label,
             "stats": check(H, det=n <= DET_MAX),
+            "flux_tiles": flux_tiles(H),
             "png_b64": base64.b64encode(matrix_png(H, 512)).decode("ascii"),
         }
     return {"ok": False, **_jsafe(info)}

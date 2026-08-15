@@ -119,7 +119,13 @@ Tabs:
   progress over WebSocket, mid‑run retune, export to library; one Run
   panel (matrix + E/BEST/T waveforms, Micromag‑style series toggles)
 - **Micromag Sim** — annealing lab with live site‑energy/gradient/flux
-  heatmaps, waveforms, and library‑goal evolution (E_goal/goal_agree)
+  heatmaps, waveforms, and library‑goal evolution (E_goal/goal_agree).
+  Flux of Sylvester (and any A⊗H₈) is a 4‑tile H.8 tessellation — the
+  (0,0) block is exactly `flux_map(H₈)`, the other three differ only
+  on Kronecker seams. Those four atoms persist at every dyadic scale
+  (4 unique 16×16 / 32×32 / … tiles); the large‑order “variation” is
+  Walsh *placement* (H.256 tile counts 341/171/171/341, nested
+  top‑left = H.128). Paley/generic library matrices do not tile.
 - **HOA Studio** — speaker‑array designer, scene encode/rotate/analyze
 - **Terrain** — `[GENERATE]` / `[SURVEY]` sidebar switch.
   GENERATE is the Hadamard‑layered fBm heightfield with per‑octave

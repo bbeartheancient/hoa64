@@ -209,6 +209,43 @@ def selftest() -> int:
     expect(set(np.unique(W).tolist()) <= {0.0, 0.5, 1.0}, "flux_map values outside {0,½,1}")
     print(f"PASS flux_map sylvester(8) — {bh + bv} broken bonds, W sum {W.sum():.0f}")
 
+    from ..micromag import flux_tiles as _flux_tiles
+    from ..hadamard import paley as _paley, hadamard_product as _kron
+    t8 = _flux_tiles(H8)
+    expect(t8["n_tiles"] == 1 and t8["h8_agree"] == 1.0, "H8 is not its own tile")
+    expect(abs(t8["mean_w"] - 0.5) < 1e-12, "H8 mean W != 1/2")
+    for n in (16, 32, 64):
+        tn = _flux_tiles(_syl(n))
+        expect(tn["n_tiles"] == 4, f"sylvester({n}) tiles {tn['n_tiles']} != 4")
+        expect(tn["kronecker_h8"] is True, f"sylvester({n}) not flagged kronecker_h8")
+        expect(0.85 < tn["h8_agree"] < 0.95, f"sylvester({n}) H8 agree {tn['h8_agree']}")
+        expect(abs(tn["mean_w"] - 0.5) < 1e-12, f"sylvester({n}) mean W != 1/2")
+    P12 = _paley(12)
+    expect(P12 is not None, "paley(12) missing")
+    k = _flux_tiles(_kron(P12, H8))
+    expect(k["n_tiles"] == 4 and k["kronecker_h8"], "P12⊗H8 should be 4 H8-tiles")
+    ptiles = _flux_tiles(P12, tile=4)
+    expect(ptiles["n_tiles"] > 4, "paley(12) unexpectedly 4-tile at 4×4")
+    t256 = _flux_tiles(_syl(256))
+    expect(t256["n_tiles"] == 4 and t256["nested"] is True,
+           "H256 not nested 4-tile")
+    expect(t256["scales"] == {"8": 4, "16": 4, "32": 4, "64": 4, "128": 4},
+           f"H256 scales {t256['scales']}")
+    expect(t256["counts"] == [341, 341, 171, 171],
+           f"H256 counts {t256['counts']}")
+    print("PASS flux_tiles H.8 tessellation (Sylvester 4-tile, Paley does not, "
+          "P12⊗H8 does; H256 nested 4-at-every-scale, counts 341/171)")
+
+    r = client.get("/api/sim/flux-tiles?order=16&start=sylvester")
+    expect(r.status_code == 200, f"GET /api/sim/flux-tiles: {r.status_code}")
+    ft = r.json()["flux_tiles"]
+    expect(ft["n_tiles"] == 4 and ft["kronecker_h8"], f"GET flux-tiles 16: {ft}")
+    expect(r.json().get("flux_png_b64"), "GET flux-tiles missing png")
+    r = client.get("/js/tabs/micromag_sim.js")
+    expect("sim-flux-read" in r.text and "renderFluxTiles" in r.text,
+           "micromag_sim.js missing flux-tile panel")
+    print("PASS GET /api/sim/flux-tiles + FLUX TILES panel")
+
     # ------------------------------------- Item 2: micromag goal attraction
     from ..hadamard import verify as _verify
     from ..micromag import micromag_sa
@@ -1043,6 +1080,7 @@ def selftest() -> int:
     frontend_calls = [
         ("POST", "/api/search", {"engine": "maxdet", "order": 8, "budget_s": 2}),
         ("POST", "/api/sim/micromag", {"order": 8, "budget_s": 2, "start": "sylvester"}),
+        ("GET", "/api/sim/flux-tiles?order=16&start=sylvester", None),
         ("POST", "/api/hoa/speakers", {"preset": "ring8", "order": 3}),
         ("POST", "/api/hoa/scene", {"sources": [{"az": 30, "el": 10, "freq": 440}],
                                     "order": 3, "duration": 0.05, "wav": False}),

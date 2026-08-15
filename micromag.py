@@ -9,7 +9,7 @@ with block‑level updating based on orbital‑shell partitioning.
 """
 
 import numpy as np, time, math
-from hoa64.hadamard import verify, normalize, random_seed
+from hoa64.hadamard import verify, normalize, random_seed, sylvester
 
 
 def total_energy(H, lam_ex=0.0, lam_dem=1.0, lam_ani=0.0):
@@ -109,11 +109,99 @@ def flux_map(H) -> np.ndarray:
     B_v the numbers of broken horizontal/vertical bonds.  In a perfect
     Hadamard matrix adjacent rows are orthogonal, so the wall pattern
     is the local fingerprint of the remaining exchange frustration.
+
+    **H.8 tessellation.**  On Sylvester H_{2^k} = H₂^{⊗k} (and on any
+    right-Kronecker product A ⊗ H₈) the 8×8 blocks of W form a 4-tile
+    catalog: the (0,0) block is exactly ``flux_map(H₈)`` and the other
+    three differ only on the Kronecker seams (right column / bottom
+    row).  Those four atoms persist at every dyadic scale (4 unique
+    16×16, 32×32, … tiles too); what grows with n is the Walsh
+    *placement* of the tiles — H.256 is not a uniform ABAB wallpaper.
+    Paley and generic library matrices do not tile.  See ``flux_tiles``.
     """
     H = np.asarray(H, dtype=np.int8)
     hb = H * np.roll(H, -1, axis=1)  # horizontal bond flux H[i,j]·H[i,j+1]
     vb = H * np.roll(H, -1, axis=0)  # vertical bond flux   H[i,j]·H[i+1,j]
     return (2.0 - hb.astype(np.float64) - vb.astype(np.float64)) / 4.0
+
+
+def flux_tiles(H, tile: int = 8) -> dict:
+    """Catalog the t×t flux blocks of H — the H.8 tessellation test.
+
+    Returns a JSON-safe report:
+
+    * ``mean_w`` — ΣW / n².  Measured 1/2 on every Hadamard tried
+      (Sylvester, Paley, library) — half the bonds are domain walls.
+    * ``n_tiles`` / ``n_blocks`` — unique t×t flux patches vs. how
+      many the grid holds.  Sylvester n≥16 and A⊗H₈ give exactly 4
+      tiles of size 8; a Paley matrix of the same size has hundreds.
+    * ``h8_agree`` — fraction of sites matching a stamped
+      ``flux_map(H₈)`` (only when t=8 | n).  ~0.88 on Sylvester: the
+      interior of every block matches H₈ and only the seams differ.
+    * ``kronecker_h8`` — True iff the 8-catalog has exactly 4 tiles.
+    * ``counts`` — occupancy of each unique t×t tile (Sylvester 256:
+      341 / 171 / 171 / 341 — not a uniform wallpaper).
+    * ``scales`` — unique-tile count at every dyadic size 8, 16, …, n/2.
+      Sylvester keeps **4 tiles at every scale**.
+    * ``nested`` — True when the top-left n/2 block equals
+      ``flux_map(sylvester(n/2))`` (the H₂⊗M copy).
+
+    The "slight variation" on large orders is the *placement* of those
+    four tiles, not new 8×8 atoms.  H₂⊗M puts W(M) in the top-left
+    quadrant exactly; the other three quadrants are W(M) with extra
+    seams at the H₂ cuts.  Recursing gives a Walsh hierarchy: 16×16
+    tiles are the four 2×2 arrangements AB/CD, AB/DC, AD/CB, AD/DA,
+    and every 8-row strip of H.256 has a distinct tile-id sequence.
+
+    Construction use: to *lock in* the H.8 energy motif at order 8m,
+    take ``hadamard_product(A, sylvester(8))`` (H₈ on the right).
+    The open gaps below 2000 are all 4 (mod 8) and cannot be A⊗H₈.
+    """
+    W = flux_map(H)
+    n = int(W.shape[0])
+    t = int(tile)
+    out = {
+        "n": n,
+        "tile": t,
+        "mean_w": float(W.mean()),
+        "n_tiles": None,
+        "n_blocks": None,
+        "h8_agree": None,
+        "kronecker_h8": False,
+        "counts": None,
+        "scales": None,
+        "nested": False,
+    }
+    if t < 2 or n % t != 0:
+        return out
+
+    def _catalog(WW, tt):
+        seen: dict[bytes, int] = {}
+        for i in range(0, WW.shape[0], tt):
+            for j in range(0, WW.shape[1], tt):
+                key = WW[i:i + tt, j:j + tt].tobytes()
+                seen[key] = seen.get(key, 0) + 1
+        return seen
+
+    seen = _catalog(W, t)
+    out["n_tiles"] = len(seen)
+    out["n_blocks"] = (n // t) ** 2
+    out["counts"] = sorted((int(c) for c in seen.values()), reverse=True)
+    if t == 8:
+        W8 = flux_map(sylvester(8))
+        stamped = np.tile(W8, (n // 8, n // 8))
+        out["h8_agree"] = float((W == stamped).mean())
+        out["kronecker_h8"] = out["n_tiles"] == 4
+        scales = {}
+        s = 8
+        while s * 2 <= n:
+            scales[str(s)] = len(_catalog(W, s))
+            s *= 2
+        out["scales"] = scales
+        if n >= 16 and (n & (n - 1)) == 0:
+            out["nested"] = bool(np.array_equal(W[: n // 2, : n // 2],
+                                                flux_map(sylvester(n // 2))))
+    return out
 
 
 def _e_goal(corr, n, lam_goal):
