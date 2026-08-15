@@ -16,7 +16,7 @@
 
 import { connect } from "/js/ws.js";
 import { makeStripChart } from "/js/viz/stripchart.js";
-import { retintCanvas, themeColor } from "/js/theme.js";
+import { retintCanvas, fillPlusOne, themeColor } from "/js/theme.js";
 import { ELECTRIC_FRAG, FLUX_FRAG, makeShaderCanvas, hexToRgb01 } from "/js/viz/shaders.js";
 
 let msgEl, statusEl, statsEl, cancelBtn, exportBtn;
@@ -192,6 +192,11 @@ function resetRun() {
   renderGerzon(null);
   for (const c of Object.values(layerCache)) c.has = false; // stale layers drop
   showLayer();
+  // both viewports start as an all-+1 field (themed bright end), never
+  // blank or stale from the previous run; real frames overwrite them via
+  // drawPng / cacheDraw → showLayer
+  fillPlusOne(matrixCanvas);
+  fillPlusOne(fieldCanvas);
 }
 
 // electric-field background: RAF loop feeding uEnergy from the WS stream

@@ -54,6 +54,9 @@ channel count, and FOA is a normalized H4.
   anneals toward that library matrix via `micromag_sa`'s goal
   attraction — frames carry `E_goal`/`goal_agree`, and `lam_goal` is
   mid-run retunable; `lam_z` is the Gerzon H₂ prior, live-retunable;
+  a step-0 frame with the resolved start matrix's preview PNG + energy
+  decomposition is reported before the anneal begins (sylvester/library
+  starts only — a random start is generated inside `micromag_sa`);
   `GET /api/sim/gerzon` inspects a start matrix's Z-wall with no anneal),
   `routes_hoa.py` (Phase 4: /api/hoa speaker-array designer, scene
   encode/rotate/analyze with one-shot WAV tokens),
@@ -97,7 +100,10 @@ channel count, and FOA is a normalized H4.
   tab, not an Antenna panel),
   job-based /fields FDTD lab and /evolve Hadamard-seeded topology SA —
   same callback→report/`_BudgetStop`/`params["live"]` wiring as
-  routes_sim), `routes_filter.py` (PCB RF-filter lab under /api/filter:
+  routes_sim; /evolve streams the far-field `pattern_png_b64` mid-run on
+  best_E improvements (≥2 s apart; the post-loop final frame always
+  carries it) via the MoM `pattern` callable riding in the SA callback's
+  `geom`), `routes_filter.py` (PCB RF-filter lab under /api/filter:
   sync /design Butterworth/Chebyshev LPF/HPF/BPF/BSF with a `topo`
   selector — distributed stepped-Z/gap+stub/hairpin/open-stub plus
   lumped `lc` (LPF/HPF/BPF/BSF), `dc_lc` and `c_shunt` coupled-resonator
@@ -138,6 +144,12 @@ channel count, and FOA is a normalized H4.
   Rec.601 luma (luma capped pure green at ~58% and never reached the
   lightest shade); exported
   `dmgLut(bivert)` pins the exact 4-shade DMG mapping for tests;
+  `fillPlusOne(canvas)` paints a viewport as an all-+1 field (fill with
+  the server's #22c55e +1 ink, then the normal retint path — exactly a
+  retinted all-+1 PNG); every streamed-job matrix/field viewport (Matrix
+  Lab, Search Studio, Micromag Sim, Antenna FIELDS/EVOLVE) calls it at
+  job start / tab reset so it never sits blank or shows the previous run
+  while the first compute frame is made;
   mono/green/amber ramps are pure bg→fg
   single-hue luminance lerps; DMG is the exact user palette
   #1b2a09/#0e450b/#496b22/#9a9e3f; CGB interpolates those anchors into a

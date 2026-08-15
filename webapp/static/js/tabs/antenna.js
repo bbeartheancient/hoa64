@@ -20,7 +20,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { connect } from "/js/ws.js";
 import { makeStripChart } from "/js/viz/stripchart.js";
-import { retintCanvas, themeColor } from "/js/theme.js";
+import { retintCanvas, fillPlusOne, themeColor } from "/js/theme.js";
 import { drawKicadPrims } from "/js/kicad_layers.js";
 
 const LAYERS = { design: "DESIGN", parts: "PARTS", fields: "FIELDS", evolve: "EVOLVE", kicad: "KICAD", smith: "SMITH", array: "ARRAY" };
@@ -628,6 +628,14 @@ async function doFields() {
   };
   if (fWs) fWs.close();
   if (f3Cell) initFieldsThree(f3Cell);
+  // both field planes start as an all-+1 field, not transparent, until the
+  // first FDTD frame (step frame_every) lands via updateFieldTex
+  for (const tex of [f3TexXY, f3TexXZ]) {
+    if (!tex) continue;
+    fillPlusOne(tex.source.data);
+    tex.needsUpdate = true;
+  }
+  f3Render();
   fChart.clear();
   fStatsEl.replaceChildren();
   fStatusEl.textContent = "connecting…";
@@ -1047,7 +1055,10 @@ async function doEvolve() {
   if (eWs) eWs.close();
   eChart.clear();
   eStatsEl.replaceChildren();
-  patternCell.classList.add("hidden");
+  // the pattern streams during the run now — show an all-+1 field from
+  // job start instead of hiding the cell until the final frame
+  patternCell.classList.remove("hidden");
+  fillPlusOne(patternCanvas);
   lastPoints = null;
   lastEvolvePoints = null;
   drawWire();

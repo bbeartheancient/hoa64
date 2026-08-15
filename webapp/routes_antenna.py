@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import base64
 import math
+import time
 import uuid
 from collections import OrderedDict
 from typing import Any
@@ -380,6 +381,15 @@ def _zpair(z: complex) -> dict:
     return {"re": float(np.real(z)), "im": float(np.imag(z))}
 
 
+def _pattern_png_b64(design: dict) -> str:
+    """Far-field pattern of a MoM design on a θ×φ grid, as a heatmap PNG."""
+    th = np.linspace(0.0, math.pi, 91)
+    ph = np.linspace(0.0, 2.0 * math.pi, 181, endpoint=False)
+    TH, PH = np.meshgrid(th, ph, indexing="ij")
+    pat = np.asarray(design["pattern"](TH, PH), dtype=np.float64)
+    return base64.b64encode(heatmap_png(pat, 512)).decode("ascii")
+
+
 def _run_evolve(job: Job):
     p = job.params
     medium = p["medium"]
@@ -389,25 +399,37 @@ def _run_evolve(job: Job):
     stop = _BudgetStop(job)
     rng = np.random.default_rng(p.get("seed"))
 
+    # mid-run pattern streaming state: re-render only when best_E improves,
+    # throttled to one frame per ~2 s (the θ×φ MoM grid render is not free);
+    # the post-loop final frame below always carries the pattern
+    last_pat = [math.inf, 0.0]  # [best_E at last pattern frame, monotonic t]
+
     def cb(stats: dict) -> None:
         stats = dict(stats)
         geom = stats.pop("geom", None) or {}
         s11 = complex(geom.get("s11", 0.0))
         s11_db = 20.0 * math.log10(max(abs(s11), 1e-12))
-        report(
-            job,
-            engine="antenna_evolve",
-            step=stats.get("step", 0),
-            T=stats.get("T"),
-            E=stats.get("E"),
-            best_E=stats.get("best_E"),
-            accepts=stats.get("accepts", 0),
-            terms=geom.get("terms"),
-            points=np.asarray(geom.get("points", [])).tolist(),
-            z_in=_zpair(complex(geom.get("z_in_ohm", 0.0))),
-            gain_dbi=geom.get("gain_dbi"),
-            s11_db=s11_db,
-        )
+        msg: dict[str, Any] = {
+            "engine": "antenna_evolve",
+            "step": stats.get("step", 0),
+            "T": stats.get("T"),
+            "E": stats.get("E"),
+            "best_E": stats.get("best_E"),
+            "accepts": stats.get("accepts", 0),
+            "terms": geom.get("terms"),
+            "points": np.asarray(geom.get("points", [])).tolist(),
+            "z_in": _zpair(complex(geom.get("z_in_ohm", 0.0))),
+            "gain_dbi": geom.get("gain_dbi"),
+            "s11_db": s11_db,
+        }
+        best_E = stats.get("best_E")
+        pattern = geom.get("pattern")  # MoM callable, popped with geom
+        now = time.monotonic()
+        if (pattern is not None and best_E is not None
+                and best_E < last_pat[0] and now - last_pat[1] >= 2.0):
+            last_pat[0], last_pat[1] = best_E, now
+            msg["pattern_png_b64"] = _pattern_png_b64({"pattern": pattern})
+        report(job, **msg)
 
     best, info = antenna_evo.antenna_sa(
         p["f_mhz"] * 1e6,
@@ -426,11 +448,7 @@ def _run_evolve(job: Job):
 
     # final frame: far-field pattern of the best design on a θ×φ grid
     design = info["best_design"]
-    th = np.linspace(0.0, math.pi, 91)
-    ph = np.linspace(0.0, 2.0 * math.pi, 181, endpoint=False)
-    TH, PH = np.meshgrid(th, ph, indexing="ij")
-    pat = np.asarray(design["pattern"](TH, PH), dtype=np.float64)
-    pattern_png_b64 = base64.b64encode(heatmap_png(pat, 512)).decode("ascii")
+    pattern_png_b64 = _pattern_png_b64(design)
     report(
         job,
         engine="antenna_evolve",

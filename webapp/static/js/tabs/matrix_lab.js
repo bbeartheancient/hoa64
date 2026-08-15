@@ -14,7 +14,7 @@
 
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { retintCanvas, themeColor, currentTheme, themeRamp, getSetting, setSetting } from "/js/theme.js";
+import { retintCanvas, fillPlusOne, themeColor, currentTheme, themeRamp, getSetting, setSetting } from "/js/theme.js";
 import { makePostPipeline, hexToRgb01 } from "/js/viz/shaders.js";
 
 // cgb → "dmg": the 4-shade DMG-style grid fits the CGB LCD look (Feature 6)
@@ -126,6 +126,7 @@ async function doConstruct() {
   const seedRaw = document.getElementById("seed").value;
   const body = { order, method };
   if (seedRaw !== "") body.seed = parseInt(seedRaw, 10);
+  fillPlusOne(canvas); // all-+1 until the constructed matrix's PNG arrives
   msg("constructing…");
   try {
     const d = await api("/api/construct", body);
@@ -138,6 +139,7 @@ async function doConstruct() {
 
 async function doLoadLibrary() {
   const order = parseInt(document.getElementById("order").value, 10);
+  fillPlusOne(canvas); // all-+1 until the library matrix's PNG arrives
   msg("loading…");
   try {
     const d = await api(`/api/library/${order}`);
@@ -159,6 +161,7 @@ function parseCsvMatrix(text) {
 }
 
 async function doVerifyFile(file) {
+  fillPlusOne(canvas); // all-+1 until the verification lands
   msg(`verifying ${file.name}…`);
   try {
     const matrix = parseCsvMatrix(await file.text());
@@ -521,6 +524,7 @@ function resetTo2D() {
 async function doOpenOrder(order) {
   // cross-tab entry point (Library tab): library first, toolchain fallback
   document.getElementById("order").value = order;
+  fillPlusOne(canvas); // all-+1 until the loaded matrix's PNG arrives
   msg("loading…");
   try {
     const d = await api(`/api/library/${order}`);
@@ -662,6 +666,7 @@ export function init(container) {
     el("div", {}, el("div", { class: "canvas-wrap" }, canvas, spWrap), spacePanel)
   );
   container.replaceChildren(lab);
+  fillPlusOne(canvas); // tab setup: all-+1 field, not a blank viewport
 
   document.getElementById("btn-construct").addEventListener("click", doConstruct);
   document.getElementById("btn-library").addEventListener("click", doLoadLibrary);

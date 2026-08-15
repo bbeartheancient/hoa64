@@ -486,6 +486,21 @@ export function recolorCanvas(canvas, { src = null } = {}) {
   _applyTint(canvas);
 }
 
+export function fillPlusOne(canvas) {
+  // paint `canvas` as an all-+1 field: the server renders +1 entries as
+  // #22c55e ink on near-black (_png.matrix_png), so filling with that ink
+  // and running the normal retint path reproduces exactly what a retinted
+  // all-+1 server PNG looks like — LUT, subthemes, palette packs and
+  // themechange re-tints all included. Job viewports call this at job
+  // start / tab reset so they never sit blank (or show the previous run)
+  // while the first compute frame is being made; real frames then
+  // overwrite via the existing drawPng path.
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#22c55e";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  retintCanvas(canvas);
+}
+
 export function retintCanvas(canvas) {
   // call right after drawing a server PNG onto `canvas`: captures the
   // pristine pixels, registers for themechange re-tints, applies now

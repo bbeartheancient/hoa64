@@ -7,7 +7,7 @@
 
 import { connect } from "/js/ws.js";
 import { makeStripChart } from "/js/viz/stripchart.js";
-import { retintCanvas } from "/js/theme.js";
+import { retintCanvas, fillPlusOne } from "/js/theme.js";
 
 const ENGINES = ["maxdet", "micromag", "tile", "gerzon", "williamson", "gs", "circulant"];
 
@@ -73,6 +73,10 @@ function resetRun() {
   statsEl.replaceChildren();
   statusEl.textContent = "connecting…";
   exportBtn.style.display = "none";
+  // all-+1 field until the first preview frame — also clears the previous
+  // run's image (search engines generate their start internally, so the
+  // server has nothing earlier to send)
+  fillPlusOne(previewCanvas);
 }
 
 function handleFrame(d) {

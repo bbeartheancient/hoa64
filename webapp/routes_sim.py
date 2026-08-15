@@ -8,8 +8,12 @@ the full physics: every 500-step frame carries the energy decomposition
 `energy_gradient` map are rendered as heatmap PNGs (`heatmap_png`'s
 blue→black→red ramp) for the live view.  Gerzon AB |Z| rides along
 as `z_png_b64` plus aligned/overlap H₂ counts; `lam_z` is the SA
-prior and is mid-run retunable.  `GET /api/sim/gerzon` inspects a
-start matrix with no anneal.
+prior and is mid-run retunable.  When the start method resolves a
+matrix (sylvester/library), a step-0 frame with its preview PNG and
+energy decomposition is reported before the anneal begins — the
+viewports show the real start instead of sitting on the client's
+all-+1 placeholder until the first 500-step callback.
+`GET /api/sim/gerzon` inspects a start matrix with no anneal.
 
 Export reuses the kind-agnostic `/api/search/{job_id}/export` endpoint —
 `_package_result` stores the verified matrix on `job.matrix`, which is
@@ -198,6 +202,30 @@ def _run_sim(job: Job):
     lam_ex0 = float(p.get("lam_ex", 0.0))
     lam_ani0 = float(p.get("lam_ani", 0.0))
     stop = _BudgetStop(job)
+
+    # Immediate step-0 frame with the resolved start matrix (when the start
+    # method provides one — a random start is generated inside micromag_sa),
+    # so the viewports show the real start instead of the client's all-+1
+    # placeholder until the first engine callback at step 500.
+    if start is not None and sim_order <= PREVIEW_MAX:
+        E0, E_exch0, E_dem0, E_anis0 = micromag.total_energy(
+            start, lam_ex=lam_ex0, lam_ani=lam_ani0
+        )
+        report(
+            job,
+            engine="micromag_sim",
+            step=0,
+            E=E0,
+            best_E=E0,
+            E_exch=E_exch0,
+            E_dem=E_dem0,
+            E_anis=E_anis0,
+            accepts=0,
+            elapsed_s=0.0,
+            matrix_png_b64=base64.b64encode(
+                matrix_png(np.asarray(start, dtype=np.int8), 256)
+            ).decode("ascii"),
+        )
 
     best_H: np.ndarray | None = None
     best_E = math.inf

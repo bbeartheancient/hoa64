@@ -124,9 +124,10 @@ string) is cached — revisits are free.
 
 Streaming contract identical to `micromag_sa`: every 25 steps
 ``callback({"step", "T", "E", "best_E", "accepts", "geom"})`` with `geom`
-the current-best geometry dict (a conduit for live previews — the route
-layer pops it before JSON), and `stop_flag.is_set()` is polled on the
-same cadence for early return.  Returns ``(best, info)`` with
+the current-best geometry dict (points/z_in/gain/s11 plus the MoM
+`pattern` callable — a conduit for live previews, including the mid-run
+far-field pattern; the route layer pops it before JSON), and
+`stop_flag.is_set()` is polled on the same cadence for early return.  Returns ``(best, info)`` with
 ``info = {steps, accepts, best_E, elapsed_s, best_design}``.
 """
 
@@ -489,6 +490,10 @@ def antenna_sa(f_hz: float, medium: str = "air", topology: str = "meander",
                         "z_in_ohm": best_res["z_in_ohm"],
                         "gain_dbi": best_res["gain_dbi"],
                         "s11": best_res["s11"],
+                        # MoM pattern callable — lets the route layer stream
+                        # the far-field pattern mid-run; popped with geom,
+                        # never JSON-serialized
+                        "pattern": best_res["pattern"],
                     }
                 callback({
                     "step": steps, "T": t, "E": e_cur, "best_E": best_e,
