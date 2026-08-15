@@ -556,6 +556,39 @@ def selftest() -> int:
     expect(r.status_code == 400, "kicad bogus design_type should be 400")
     print("PASS antenna kicad rejects bogus design_type")
 
+    r = client.post("/api/antenna/kicad", json={"design_type": "mifa", "f_mhz": 2450})
+    d = r.json()
+    expect(r.status_code == 200 and d.get("preview") and d.get("params"),
+           "POST /api/antenna/kicad mifa missing preview/params")
+    expect(d["params"]["mifa_trace_mm"] == 0.508, "mifa_trace_mm != 20 mil")
+    expect(d["params"]["return_loss_target_db"] == 10.0, "RL target != 10 dB")
+    expect(len(d["preview"]["prims"]) >= 4, "mifa preview has too few prims")
+    expect(any(f.endswith(".kicad_pcb") for f in d["files"]), "mifa missing board")
+    expect(d.get("preview_board") and d["preview_board"]["prims"],
+           "mifa missing preview_board")
+    print(f"PASS antenna kicad MIFA ({len(d['preview']['prims'])} prims, "
+          f"{len(d['files'])} files)")
+
+    r = client.get("/api/antenna/kicad/library")
+    expect(r.status_code == 200, "GET /api/antenna/kicad/library")
+    lib = r.json().get("footprints") or []
+    print(f"PASS antenna kicad library ({len(lib)} RF_Antenna footprints)")
+    if lib:
+        name = next((e["name"] for e in lib if "SWRA117D" in e["name"]), lib[0]["name"])
+        r = client.post("/api/antenna/kicad", json={
+            "design_type": "lib", "f_mhz": 2450, "opts": {"lib_name": name}})
+        d = r.json()
+        expect(r.status_code == 200 and d.get("preview"), f"lib {name} export failed")
+        print(f"PASS antenna kicad library scale ({name})")
+
+    walk = [[0, 0, 0], [0.005, 0, 0], [0.005, 0.005, 0], [0.01, 0.005, 0]]
+    r = client.post("/api/antenna/kicad", json={
+        "design_type": "evolved", "f_mhz": 2450, "opts": {"points": walk}})
+    d = r.json()
+    expect(r.status_code == 200 and d.get("preview") and d.get("preview_board"),
+           "evolved kicad missing preview")
+    print("PASS antenna kicad evolved walk")
+
     # fresh export kept unconsumed for the frontend-path pinning below
     rp = client.post("/api/antenna/kicad", json={"design_type": "patch", "f_mhz": 2450})
     kicad_pin_token = rp.json()["token"]
@@ -610,9 +643,25 @@ def selftest() -> int:
     expect("re" in res["z_in"] and "im" in res["z_in"], "evolve z_in missing re/im")
     print(f"PASS antenna evolve (H64 seed, gain {res['gain_dbi']:.2f} dBi)")
 
+    r = client.post("/api/antenna/evolve", json={
+        "f_mhz": 2450, "medium": "air", "topology": "pcb",
+        "hadamard_order": 32, "max_steps": 40, "budget_s": 60,
+    })
+    expect(r.status_code == 200 and "job_id" in r.json(), "POST evolve topology=pcb")
+    jid = r.json()["job_id"]
+    d = wait_terminal(jid, 60.0)
+    expect(d["status"] == "done", f"pcb evolve status {d['status']}")
+    res = d["result"]
+    expect(res.get("kind") == "pcb", f"pcb evolve kind={res.get('kind')}")
+    expect("E_dfm" in (res.get("terms") or {}), "pcb evolve missing E_dfm")
+    print(f"PASS antenna evolve pcb (kind=pcb, S11 {res['s11_db']:.1f} dB)")
+
     r = client.get("/js/tabs/antenna.js")
     expect(r.status_code == 200 and "ant-layer-select" in r.text, "antenna.js tab")
     expect("smith-canvas" in r.text and "drawSmith" in r.text, "antenna.js smith panel")
+    expect("kicad-canvas" in r.text and "drawKicadPreview" in r.text,
+           "antenna.js kicad preview")
+    expect("ant-e-topo" in r.text and "ant-k-lib" in r.text, "antenna.js pcb/lib controls")
     r = client.get("/")
     expect('data-tab="antenna"' in r.text, "index antenna tab button")
     print("PASS antenna static integrity (tab js + index button)")
@@ -664,6 +713,44 @@ def selftest() -> int:
     r = client.get("/")
     expect('data-tab="noise"' in r.text, "index noise tab button")
     print(f"PASS noise lab (15 classes, model trained: {nd['model']['trained']})")
+
+    r = client.post("/api/filter/design", json={
+        "kind": "lpf", "proto": "butterworth", "n": 5, "f_c_mhz": 1000})
+    expect(r.status_code == 200, f"filter design: {r.status_code} {r.text[:200]}")
+    fd = r.json()
+    expect(fd["design"]["kind"] == "lpf" and fd["sweep"]["s21_db"], "filter design payload")
+    expect(fd["metrics"]["il_db"] < 3.0, f"LPF passband IL {fd['metrics']['il_db']}")
+    expect(fd["preview"]["prims"], "filter design missing preview")
+    print(f"PASS filter design LPF n=5 (IL {fd['metrics']['il_db']:.2f} dB, "
+          f"{len(fd['preview']['prims'])} prims)")
+
+    r = client.post("/api/filter/design", json={
+        "kind": "bpf", "n": 3, "f_lo_mhz": 2300, "f_hi_mhz": 2600})
+    expect(r.status_code == 200 and r.json()["design"]["kind"] == "bpf", "filter bpf")
+    r = client.post("/api/filter/kicad", json={"kind": "lpf", "n": 5, "f_c_mhz": 2450})
+    kd = r.json()
+    expect(r.status_code == 200 and kd.get("token") and kd.get("files"), "filter kicad")
+    expect(any(f.endswith(".kicad_mod") for f in kd["files"]), "filter kicad missing mod")
+    print(f"PASS filter kicad ({len(kd['files'])} files)")
+
+    r = client.post("/api/filter/evolve", json={
+        "kind": "lpf", "n": 3, "f_c_mhz": 1000, "hadamard_order": 16,
+        "max_steps": 30, "budget_s": 30})
+    expect(r.status_code == 200 and "job_id" in r.json(), "POST /api/filter/evolve")
+    jid = r.json()["job_id"]
+    d = wait_terminal(jid, 30.0)
+    expect(d["status"] == "done", f"filter evolve status {d['status']}")
+    expect(np.isfinite(d["result"]["best_E"]), "filter evolve best_E")
+    expect(d["result"]["design"]["kind"] == "lpf", "filter evolve design kind")
+    print(f"PASS filter evolve (best_E {d['result']['best_E']:.3f}, "
+          f"IL {d['result']['metrics']['il_db']:.2f} dB)")
+
+    r = client.get("/js/tabs/filter.js")
+    expect(r.status_code == 200 and "FILTER LAB" in r.text, "filter.js tab")
+    expect("flt-layer-select" in r.text and "drawSweep" in r.text, "filter.js layers")
+    r = client.get("/")
+    expect('data-tab="filter"' in r.text, "index filter tab button")
+    print("PASS filter static integrity")
 
     # ------------------------------------------------ Phase 4.5: HUD themes
     r = client.get("/css/themes.css")
@@ -973,6 +1060,8 @@ def selftest() -> int:
         ("POST", "/api/antenna/design", {"f_lo_mhz": 2400, "f_hi_mhz": 2485}),
         ("POST", "/api/antenna/parts", {"f_lo_mhz": 2400, "f_hi_mhz": 2485}),
         ("POST", "/api/antenna/kicad", {"design_type": "patch", "f_mhz": 2450}),
+        ("GET", "/api/antenna/kicad/library", None),
+        ("POST", "/api/antenna/kicad", {"design_type": "mifa", "f_mhz": 2450}),
         ("POST", "/api/antenna/fields", {"f_mhz": 150, "medium": "air", "n": 16,
                                          "max_steps": 10, "budget_s": 5}),
         ("POST", "/api/antenna/evolve", {"f_mhz": 2450, "max_steps": 10,
@@ -981,6 +1070,10 @@ def selftest() -> int:
                                         "n_points": 3}),
         ("GET", "/api/noise/classes", None),
         ("POST", "/api/noise/analyze", {"path": "/nonexistent.wav"}),
+        ("POST", "/api/filter/design", {"kind": "lpf", "n": 3, "f_c_mhz": 1000}),
+        ("POST", "/api/filter/kicad", {"kind": "lpf", "n": 3, "f_c_mhz": 2450}),
+        ("POST", "/api/filter/evolve", {"kind": "lpf", "n": 3, "f_c_mhz": 1000,
+                                        "max_steps": 10, "budget_s": 5}),
         ("GET", f"/api/antenna/kicad/{kicad_pin_token}/{kicad_pin_name}", None),
     ]
     for method, path, body in frontend_calls:

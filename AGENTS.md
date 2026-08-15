@@ -83,13 +83,19 @@ channel count, and FOA is a normalized H4.
   /api/antenna: sync /design recommender + /parts matcher (full-cover
   first, then overlap fallback so a 2400–5800 query still lists every
   in-range row; dual-band SKUs are one row per lobe) + /kicad
-  export [bounded one-shot-per-file token cache, contents in memory] +
+  export [patch/meander_ifa/mifa/loop/lib/evolved; GET /kicad/library
+  lists installed RF_Antenna.pretty; response carries preview prims +
+  JLCPCB design_params; bounded one-shot-per-file token cache] +
   /smith MoM Z_in(f)→Γ(f) sweep [dipole or explicit wire geometry] +
   /survey + /survey/map (SRTM DEM + Esri imagery; used by the Terrain
   tab, not an Antenna panel),
   job-based /fields FDTD lab and /evolve Hadamard-seeded topology SA —
   same callback→report/`_BudgetStop`/`params["live"]` wiring as
-  routes_sim), `routes_noise.py` (/api/noise: /classes model status,
+  routes_sim), `routes_filter.py` (PCB RF-filter lab under /api/filter:
+  sync /design Butterworth/Chebyshev LPF/HPF/BPF/BSF + S21/S11 sweep +
+  /kicad footprint/board, job-based /evolve Hadamard SA on section
+  lengths/widths; lumped LC/RC/CRC export from the same g-values is
+  planned, not shipped), `routes_noise.py` (/api/noise: /classes model status,
   /train DiT job, /analyze WAV-path or live-mic classify → mel PNG +
   probs), `static/vendor/`
   (pinned three.js 0.170.0 + OrbitControls, import map in index.html),
@@ -164,14 +170,24 @@ channel count, and FOA is a normalized H4.
   bounded `job.history` replay buffer, `job.matrix` holds verified results
   off-JSON), `static/` (no-build ES-module frontend; tabs: Matrix Lab,
   Search Studio, Micromag Sim, HOA Studio, Terrain, Orbitals, Library,
+  Filter (`js/tabs/filter.js` — `#flt-layer-select` DESIGN/EVOLVE/KICAD:
+  stepped-Z LPF, gap+stub HPF, hairpin BPF, open-stub BSF; S21/S11
+  canvas; KiCad preview + one-shot download; SA streams IL/RL/rejection;
+  current output is distributed microstrip — lumped LC/RC/CRC ladders
+  from the same prototype are a planned extra export, not a UI layer
+  yet),
   Antenna (`js/tabs/antenna.js` — `#ant-layer-select` DESIGN/PARTS/
   FIELDS/EVOLVE/KICAD/SMITH panels; FIELDS/EVOLVE stream job frames over
   `/ws/job/{id}`, DESIGN auto-fires the parts query and exposes one-shot
   KiCad downloads, PARTS formats `size_mm` as L×W×H (arrays must not be
   passed to `el()` — that threw and painted an empty table) and shows
   overlap % when `/parts` falls back from full-cover, KICAD is a
-  standalone export form with per-file download links, SMITH renders
-  the MoM Z_in sweep on an interactive Γ plane with hover readout;
+  standalone export form (PATCH/MEANDER IFA/MIFA/LOOP/LIBRARY/LAST
+  EVOLVED) with a FOOTPRINT/BOARD canvas preview, JLCPCB design_params
+  table, and per-file download links — LIBRARY scales
+  `RF_Antenna.pretty`, EVOLVE has WIRE/PCB topology plus Export KiCad,
+  SMITH renders the MoM Z_in sweep on an interactive Γ plane with hover
+  readout;
   site survey lives on the Terrain tab (`[GENERATE]`/`[SURVEY]`);
   job results keep long payloads
   (pattern_png_b64/resonance_note/points) OUT of the DOM — whitelist
@@ -250,11 +266,22 @@ channel count, and FOA is a normalized H4.
   Z_in ≈ 73+j42 Ω at thin radius, resonance at 0.48 λ — plus
   `antenna_sa`: Hadamard-row-seeded meander-walk topology annealing with
   length-invariant corner-flip/swap moves and a multi-term
-  match/gain/compactness objective), `kicad_gen.py` (procedural KiCad 7
-  `.kicad_mod`/`.kicad_pcb` for patch/meander-IFA/loop PCB antennas from
-  `em_physics` dimensions; Wheeler/Hammerstad 50 Ω feedline synthesis,
-  6h ground margin, S-expr parser validity gate + `kicad-cli pcb
-  upgrade` check when available),
+  match/gain/compactness objective — `topology="pcb"` uses λ/4 length,
+  20 mil trace, E_dfm/E_rl (JLCPCB 5 mil floor + RL ≥ 10 dB) and
+  exports via `kicad_gen.footprint_from_walk`), `kicad_gen.py`
+  (procedural KiCad 7 `.kicad_mod`/`.kicad_pcb` for
+  patch/meander-IFA/MIFA/loop plus scaled `RF_Antenna.pretty` library
+  bases and evolved walks; JLCPCB design_params + s-expr preview
+  prims; Wheeler/Hammerstad 50 Ω feedline, 6h ground, keep-out under
+  the radiator; also `footprint_filter` / `design_type="filter"` for
+  stepped/hairpin/stub RF filters from `rf_filter.layout_mm`; S-expr
+  parser validity gate + `kicad-cli pcb upgrade` check when available),
+  `rf_filter.py` (PCB RF-filter physics: Butterworth/Chebyshev g-values,
+  Wheeler microstrip, ABCD cascade S-params with tanδ+Rs loss, Marki
+  IL≈4.343 Σg/(Δ Q_u), everythingRF digest targets RL≥10 dB and
+  40 dBc @ 10 % from the edge; `filter_sa` Hadamard-seeded section
+  perturbation; ships distributed microstrip layout — lumped LC / RC /
+  CRC-π realisations of the same *g*-vector are the next output form),
   `site_survey.py` (virtual site survey: AWS Open Data SRTM Terrarium
   tiles [no key, cached to ~/.cache/hoa64/terrain], tight DEM window +
   Esri World Imagery JPEG mosaic [Pillow; cached as PNG under

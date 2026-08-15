@@ -82,6 +82,14 @@ The step length is fixed so the total wire length is the resonant length:
 N steps × Δ = λ_medium/2, i.e. Δ = λ_medium/(2N); the default bounding
 box `bbox_m` is a λ_medium/4 square.
 
+Search space for ``topology="pcb"``: the same planar walk, but total
+length = λ/4 (printed IFA), trace radius = 10 mil (JLCPCB/Cypress
+MIFA is 20 mil throughout), default bbox λ/8, plus DFM / return-loss
+terms — E_dfm penalises folds tighter than 0.15 mm (5 mil floor) and
+E_rl wants S11 ≤ −10 dB (90 % of incident power into the antenna).
+The best walk exports as a KiCad footprint via
+``kicad_gen.footprint_from_walk``.
+
 **Invariant-preserving moves** (the analogue of micromag's
 polarity-count-preserving swaps): every proposal keeps the total wire
 length — hence the electrical length and rough resonance — exactly
@@ -361,16 +369,24 @@ def antenna_sa(f_hz: float, medium: str = "air", topology: str = "meander",
     best_design} with best_design = best + the MoM `pattern` callable and
     run metadata.
     """
-    if topology != "meander":
-        raise ValueError(f"unknown topology {topology!r}; supported: 'meander'")
+    if topology not in ("meander", "pcb"):
+        raise ValueError(f"unknown topology {topology!r}; supported: 'meander', 'pcb'")
     rng = rng or np.random.default_rng()
     mp = medium_params(f_hz, medium)
     lam = mp["wavelength"]
     n_steps = int(hadamard_order)
-    step_len = lam / (2.0 * n_steps)          # total wire length = λ/2 (resonant)
-    if bbox_m is None:
-        bbox_m = lam / 4.0                    # λ/4 square box
-    radius = lam / 1000.0                     # thin wire
+    is_pcb = topology == "pcb"
+    if is_pcb:
+        # printed IFA: electrical length ≈ λ/4, 20 mil trace (JLCPCB MIFA)
+        step_len = lam / (4.0 * n_steps)
+        if bbox_m is None:
+            bbox_m = lam / 8.0
+        radius = 0.254e-3                     # 20 mil / 2
+    else:
+        step_len = lam / (2.0 * n_steps)      # total wire length = λ/2
+        if bbox_m is None:
+            bbox_m = lam / 4.0
+        radius = lam / 1000.0                 # thin wire
 
     w = {"w_z": 1.0, "w_gain": 1.0, "w_size": 1.0}
     cache: dict[bytes, tuple[dict, dict]] = {}   # codes → (terms, mom result)
@@ -382,6 +398,9 @@ def antenna_sa(f_hz: float, medium: str = "air", topology: str = "meander",
             return hit
         if not _lattice_ok(codes):
             terms = {"E_z": 4.0, "E_gain": 2.0, "E_size": 4.0}
+            if is_pcb:
+                terms["E_dfm"] = 4.0
+                terms["E_rl"] = 4.0
             cache[key] = (terms, None)
             return terms, None
         pts = _walk_points(codes, step_len)
@@ -394,12 +413,25 @@ def antenna_sa(f_hz: float, medium: str = "air", topology: str = "meander",
             "E_gain": 1.0 - min(res["gain_dbi"], 6.0) / 6.0,
             "E_size": diag / float(bbox_m),
         }
+        if is_pcb:
+            # JLCPCB 5 mil floor: penalise walks that fold tighter than 0.15 mm
+            min_gap = 0.15e-3
+            gap_pen = 0.0
+            for i in range(0, len(pts) - 2, 2):
+                d = float(np.linalg.norm(pts[i] - pts[i + 2]))
+                if d < min_gap:
+                    gap_pen += (min_gap - d) / min_gap
+            terms["E_dfm"] = gap_pen
+            terms["E_rl"] = max(0.0, (10.0 + res["s11_db"]) / 10.0)  # want S11 ≤ −10 dB
         cache[key] = (terms, res)
         return terms, res
 
     def energy(terms: dict) -> float:
-        return (w["w_z"] * terms["E_z"] + w["w_gain"] * terms["E_gain"]
-                + w["w_size"] * terms["E_size"])
+        e = (w["w_z"] * terms["E_z"] + w["w_gain"] * terms["E_gain"]
+             + w["w_size"] * terms["E_size"])
+        if is_pcb:
+            e += 0.5 * terms.get("E_dfm", 0.0) + 0.5 * terms.get("E_rl", 0.0)
+        return e
 
     codes, (r1, r2) = _seed_walk(n_steps, rng)
     for _ in range(16):
@@ -450,20 +482,25 @@ def antenna_sa(f_hz: float, medium: str = "air", topology: str = "meander",
                     e_cur = energy(terms)
                     best_e = energy(best_terms)
             if callback is not None:
-                callback({
-                    "step": steps, "T": t, "E": e_cur, "best_E": best_e,
-                    "accepts": accepts,
-                    "geom": {
+                geom = {}
+                if best_res is not None:
+                    geom = {
                         "points": best_res["points"],
                         "z_in_ohm": best_res["z_in_ohm"],
                         "gain_dbi": best_res["gain_dbi"],
                         "s11": best_res["s11"],
-                    },
+                    }
+                callback({
+                    "step": steps, "T": t, "E": e_cur, "best_E": best_e,
+                    "accepts": accepts,
+                    "geom": geom,
                 })
             if stop_flag is not None and stop_flag.is_set():
                 break
 
     elapsed = time.monotonic() - t0
+    if best_res is None:
+        raise RuntimeError("antenna_sa: no valid geometry found")
     best = {
         "points": best_res["points"],
         "z_in_ohm": best_res["z_in_ohm"],
@@ -482,6 +519,7 @@ def antenna_sa(f_hz: float, medium: str = "air", topology: str = "meander",
         "step_len_m": step_len,
         "n_steps": n_steps,
         "step_codes": best_codes.tolist(),
+        "kind": "pcb" if is_pcb else "wire",
     })
     info = {
         "steps": steps,
@@ -576,6 +614,18 @@ if __name__ == "__main__":
                         **sa_kw)
     assert i_a["best_E"] == i_b["best_E"], (i_a["best_E"], i_b["best_E"])
     print(f"PASS  determinism: seed 7 twice → best_E = {i_a['best_E']:.6f} both")
+
+    # --- 6. PCB topology: λ/4 walk, 20 mil radius, DFM/RL terms ---
+    best_pcb, info_pcb = antenna_sa(
+        2.45e9, topology="pcb", max_steps=80,
+        rng=np.random.default_rng(3), **sa_kw)
+    assert info_pcb["best_design"]["kind"] == "pcb"
+    assert {"E_dfm", "E_rl"} <= set(best_pcb["terms"])
+    assert best_pcb["points"].ndim == 2 and best_pcb["points"].shape[1] == 3
+    print(f"PASS  antenna_sa topology=pcb (80 steps): kind=pcb, "
+          f"S11 = {best_pcb['s11_db']:.1f} dB, "
+          f"E_dfm = {best_pcb['terms']['E_dfm']:.3f}, "
+          f"E_rl = {best_pcb['terms']['E_rl']:.3f}")
 
     print(f"antenna_evo selftest: all checks passed "
           f"[{time.monotonic() - t_start:.1f} s]")

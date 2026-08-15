@@ -6,7 +6,8 @@
 //   FIELDS  POST /api/antenna/fields → 3-D field-slice viewer
 //           (Three.js orthogonal planes) + E_RMS strip chart
 //   EVOLVE  POST /api/antenna/evolve → wire geometry SA + E/BEST_E/T chart
-//   KICAD   PCB footprint export for recommended designs
+//   KICAD   PCB footprint/board export (MIFA, RF_Antenna.pretty lib,
+//           evolved walks) + JLCPCB design_params + canvas preview
 //   SMITH   Γ-plane MoM Z_in(f) sweep with interactive hover readout
 // Site survey has moved to the Terrain tab (terrain.js — [SURVEY] button).
 // Server PNG canvases go through retintCanvas (registers them for
@@ -45,6 +46,8 @@ let smithCanvas, smithReadout, lastSweep = null;
 let lastEvolvePoints = null, lastDesignEntries = null;
 let wireCanvas, patternCanvas, patternCell;
 let lastPoints = null; // last evolve points — redrawn on themechange
+let kicadCanvas, lastKicadPreview = null, lastKicadPreviewBoard = null;
+let kicadPreviewMode = "footprint", lastEvolveKind = "wire";
 
 function el(tag, attrs = {}, ...kids) {
   const n = document.createElement(tag);
@@ -143,7 +146,7 @@ function resultDownloadRow(jobId, r) {
 }
 
 const FIELD_STAT_KEYS = ["steps_run", "stopped", "dt_s", "dx_m", "cells_per_lambda", "alpha_theory", "decay_measured", "resolution_warning"];
-const EVOLVE_STAT_KEYS = ["steps", "accepts", "best_E", "elapsed_s", "gain_dbi", "s11_db", "seed_row"];
+const EVOLVE_STAT_KEYS = ["steps", "accepts", "best_E", "elapsed_s", "gain_dbi", "s11_db", "kind", "seed_row"];
 
 function fmtMm(m) {
   const mm = m * 1000;
@@ -168,6 +171,10 @@ function selectLayer(name) {
     p.classList.toggle("hidden", k !== layer);
   }
   if (name === "fields" && f3Cell) initFieldsThree(f3Cell);
+  if (name === "kicad") {
+    loadKicadLibrary();
+    drawKicadPreview();
+  }
 }
 
 // ---- DESIGN -----------------------------------------------------------------
@@ -203,6 +210,12 @@ async function doKicad(ktype, btn, fMhz, opts, resultsHost) {
     const body = { design_type: ktype, f_mhz: fMhz };
     if (opts && Object.keys(opts).length) body.opts = opts;
     const d = await api("/api/antenna/kicad", body);
+    lastKicadPreview = d.preview || null;
+    lastKicadPreviewBoard = d.preview_board || null;
+    if (!lastKicadPreviewBoard) kicadPreviewMode = "footprint";
+    drawKicadPreview();
+    syncKicadPreviewBtns();
+    if (d.params) renderKicadParams(d.params);
     if (resultsHost) {
       // one-shot download links — each URL self-destructs after one GET
       resultsHost.replaceChildren(
@@ -241,8 +254,150 @@ async function doKicadPanel() {
   }
   if (ktype === "patch") opts.feed = document.getElementById("ant-k-feed").value;
   if (ktype === "loop") opts.medium = document.getElementById("ant-k-medium").value;
+  if (ktype === "lib") {
+    const sel = document.getElementById("ant-k-lib");
+    if (!sel || !sel.value) {
+      msg("pick a KiCad RF_Antenna library footprint", "error");
+      return;
+    }
+    opts.lib_name = sel.value;
+  }
+  if (ktype === "evolved") {
+    if (!lastEvolvePoints) {
+      msg("evolve a geometry first (EVOLVE tab)", "error");
+      return;
+    }
+    opts.points = lastEvolvePoints;
+  }
   const btn = document.getElementById("ant-k-run");
   await doKicad(ktype, btn, numVal("ant-k-f", 2450), opts, document.getElementById("ant-k-results"));
+}
+
+function renderKicadParams(p) {
+  const host = document.getElementById("ant-k-params");
+  if (!host || !p) return;
+  const rows = [
+    statRow("λ₀", `${Number(p.lambda0_mm).toFixed(2)} mm`),
+    statRow("λ/4", `${Number(p.L_quarter_mm).toFixed(2)} mm`),
+    statRow("λ/2", `${Number(p.L_half_mm).toFixed(2)} mm`),
+    statRow("L_q eff", `${Number(p.L_q_eff_mm).toFixed(2)} mm`),
+    statRow("Z₀ / η₀", `${p.z0_ohm} Ω / ${Number(p.eta0_ohm).toFixed(1)} Ω`),
+    statRow("W_50", `${Number(p.w50_mm).toFixed(3)} mm`),
+    statRow("RL target", `≥ ${p.return_loss_target_db} dB (${Math.round((p.return_loss_frac_accepted || 0.9) * 100)} % accepted)`),
+    statRow("MIFA trace", `${p.mifa_trace_mil} mil (${Number(p.mifa_trace_mm).toFixed(3)} mm)`),
+    statRow("MIFA bbox", `${Number(p.mifa_bbox_mm[0]).toFixed(2)} × ${Number(p.mifa_bbox_mm[1]).toFixed(2)} mm`),
+    statRow("GND extent", `${Number(p.gnd_extent_mm).toFixed(2)} mm (6h)`),
+    statRow("keep-out", p.keepout_under_radiator ? "under radiator" : "—"),
+    statRow("matching", p.matching || "π-network"),
+    statRow("min trace", `${Number(p.min_trace_mm).toFixed(3)} mm (5 mil)`),
+    statRow("GND rule", p.ground_plane_note || "—"),
+    statRow("solder mask", p.solder_mask_note || "—"),
+    statRow("source", p.source || "JLCPCB"),
+  ];
+  host.replaceChildren(...rows);
+}
+
+function syncKicadForm() {
+  const t = document.getElementById("ant-k-type")?.value;
+  const hide = (id, on) => {
+    const n = document.getElementById(id);
+    if (n) n.classList.toggle("hidden", !!on);
+  };
+  hide("ant-k-row-feed", t !== "patch");
+  hide("ant-k-row-medium", t !== "loop");
+  hide("ant-k-row-lib", t !== "lib");
+  hide("ant-k-row-sub", t === "loop");
+  if (t === "lib") loadKicadLibrary();
+}
+
+function syncKicadPreviewBtns() {
+  const boardBtn = document.getElementById("ant-k-prev-board");
+  if (boardBtn) {
+    boardBtn.disabled = !lastKicadPreviewBoard;
+    boardBtn.style.opacity = kicadPreviewMode === "board" ? "1" : "0.45";
+  }
+  const fpBtn = document.getElementById("ant-k-prev-fp");
+  if (fpBtn) fpBtn.style.opacity = kicadPreviewMode === "footprint" ? "1" : "0.45";
+}
+
+async function loadKicadLibrary() {
+  const sel = document.getElementById("ant-k-lib");
+  if (!sel || sel.dataset.loaded === "1") return;
+  try {
+    const d = await api("/api/antenna/kicad/library");
+    const fps = d.footprints || [];
+    if (!fps.length) {
+      sel.replaceChildren(el("option", { value: "" }, "(no RF_Antenna.pretty)"));
+      return;
+    }
+    sel.replaceChildren(...fps.map((f) => el("option", { value: f.name }, f.name)));
+    const ti = fps.find((f) => f.name.includes("SWRA117D")) || fps[0];
+    sel.value = ti.name;
+    sel.dataset.loaded = "1";
+  } catch (e) {
+    sel.replaceChildren(el("option", { value: "" }, "(library unavailable)"));
+  }
+}
+
+function drawKicadPreview() {
+  if (!kicadCanvas) return;
+  const ctx = kicadCanvas.getContext("2d");
+  const W = kicadCanvas.width, H = kicadCanvas.height;
+  ctx.fillStyle = themeColor("bg");
+  ctx.fillRect(0, 0, W, H);
+  const prev = (kicadPreviewMode === "board" && lastKicadPreviewBoard)
+    ? lastKicadPreviewBoard : lastKicadPreview;
+  if (!prev || !prev.prims || !prev.prims.length) {
+    ctx.fillStyle = themeColor("dim");
+    ctx.font = "11px monospace";
+    ctx.fillText("no footprint yet", 8, H / 2);
+    return;
+  }
+  const b = prev.bbox;
+  const span = Math.max(b.xmax - b.xmin, b.ymax - b.ymin, 1e-3);
+  const sc = (Math.min(W, H) - 36) / span;
+  const x0 = (W - (b.xmax - b.xmin) * sc) / 2 - b.xmin * sc;
+  const y0 = (H - (b.ymax - b.ymin) * sc) / 2 - b.ymin * sc;
+  const X = (x) => x0 + x * sc;
+  const Y = (y) => H - (y0 + y * sc);
+  const col = (layer, kind) => {
+    if (kind === "keepout") return themeColor("accent");
+    if (layer && layer.includes("Silk")) return themeColor("dim");
+    if (layer && layer.includes("Edge")) return themeColor("accent");
+    if (layer && (layer.includes("B.Cu") || layer === "keepout")) return themeColor("accent");
+    return themeColor("fg");
+  };
+  for (const p of prev.prims) {
+    ctx.strokeStyle = col(p.layer, p.kind);
+    ctx.fillStyle = col(p.layer, p.kind);
+    ctx.lineWidth = Math.max(1, (p.w || 0.15) * sc);
+    if (p.kind === "line" && p.a && p.b) {
+      ctx.beginPath(); ctx.moveTo(X(p.a[0]), Y(p.a[1])); ctx.lineTo(X(p.b[0]), Y(p.b[1])); ctx.stroke();
+    } else if ((p.kind === "poly" || p.kind === "keepout" || p.kind === "zone") && p.pts) {
+      ctx.globalAlpha = p.kind === "keepout" ? 0.22 : (p.kind === "zone" ? 0.18 : 0.7);
+      ctx.beginPath();
+      p.pts.forEach((pt, i) => (i ? ctx.lineTo(X(pt[0]), Y(pt[1])) : ctx.moveTo(X(pt[0]), Y(pt[1]))));
+      ctx.closePath();
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.stroke();
+    } else if (p.kind === "rect" && p.a && p.b) {
+      ctx.strokeRect(X(Math.min(p.a[0], p.b[0])), Y(Math.max(p.a[1], p.b[1])),
+        Math.abs(p.b[0] - p.a[0]) * sc, Math.abs(p.b[1] - p.a[1]) * sc);
+    } else if (p.kind === "circle" && p.c) {
+      ctx.beginPath(); ctx.arc(X(p.c[0]), Y(p.c[1]), (p.r || 0) * sc, 0, Math.PI * 2); ctx.stroke();
+    } else if (p.kind === "pad" && p.c) {
+      const sx = (p.size ? p.size[0] : 1) * sc, sy = (p.size ? p.size[1] : 1) * sc;
+      ctx.fillRect(X(p.c[0]) - sx / 2, Y(p.c[1]) - sy / 2, sx, sy);
+    }
+  }
+  const wMm = b.xmax - b.xmin, hMm = b.ymax - b.ymin;
+  ctx.fillStyle = themeColor("dim");
+  ctx.font = "10px monospace";
+  ctx.fillText(
+    `${kicadPreviewMode}  ${wMm.toFixed(2)} × ${hMm.toFixed(2)} mm  (${prev.prims.length} prims)`,
+    8, H - 8
+  );
 }
 
 function renderDesign(d) {
@@ -271,7 +426,14 @@ function renderDesign(d) {
       const kb = el("button", { class: "btn btn-xs" }, "KICAD");
       kb.addEventListener("click", (ev) => {
         ev.stopPropagation();
-        if (lastBand) doKicad(ktype, kb, lastBand.f_center_mhz);
+        if (!lastBand) return;
+        const typeEl = document.getElementById("ant-k-type");
+        const fEl = document.getElementById("ant-k-f");
+        if (typeEl) typeEl.value = ktype;
+        if (fEl) fEl.value = String(lastBand.f_center_mhz);
+        syncKicadForm();
+        selectLayer("kicad");
+        doKicadPanel();
       });
       detail.firstChild.append(el("div", { class: "btn-row", style: "margin-top:6px" }, kb));
     }
@@ -598,6 +760,7 @@ function drawWire() {
 function onThemechange() {
   drawWire();
   drawSmith();
+  drawKicadPreview();
 }
 
 // ---- SMITH ------------------------------------------------------------------
@@ -752,6 +915,7 @@ function handleEvolveFrame(d) {
   if (d.type === "progress") {
     if (Array.isArray(d.points)) {
       lastPoints = d.points;
+      lastEvolvePoints = d.points;
       drawWire();
     }
     eChart.push({ E: d.E, BEST_E: d.best_E, T: d.T });
@@ -785,6 +949,7 @@ async function finishEvolve() {
     const d = await api(`/api/search/${eJob}`);
     const r = d.result || {};
     if (Array.isArray(r.points)) lastEvolvePoints = r.points;
+    if (r.kind) lastEvolveKind = r.kind;
     eStatsEl.replaceChildren(...resultStatRows(r, EVOLVE_STAT_KEYS), resultDownloadRow(eJob, r));
     msg("evolution complete", "ok");
   } catch (e) {
@@ -793,10 +958,12 @@ async function finishEvolve() {
 }
 
 async function doEvolve() {
+  const topo = document.getElementById("ant-e-topo")?.value || "meander";
+  lastEvolveKind = topo === "pcb" ? "pcb" : "wire";
   const body = {
     f_mhz: numVal("ant-e-f", 2450),
     medium: document.getElementById("ant-e-medium").value,
-    topology: "meander",
+    topology: topo,
     hadamard_order: parseInt(document.getElementById("ant-e-order").value, 10),
     max_steps: parseInt(document.getElementById("ant-e-steps").value, 10),
     T_start: 1.0,
@@ -809,9 +976,10 @@ async function doEvolve() {
   eStatsEl.replaceChildren();
   patternCell.classList.add("hidden");
   lastPoints = null;
+  lastEvolvePoints = null;
   drawWire();
   eStatusEl.textContent = "connecting…";
-  msg("starting wire evolution…");
+  msg(topo === "pcb" ? "starting PCB evolution…" : "starting wire evolution…");
   try {
     const { job_id } = await api("/api/antenna/evolve", body);
     eJob = job_id;
@@ -821,6 +989,23 @@ async function doEvolve() {
   } catch (e) {
     msg(`evolve failed: ${e.message}`, "error");
   }
+}
+
+async function doEvolveKicad() {
+  if (!lastEvolvePoints) {
+    msg("evolve a geometry first", "error");
+    return;
+  }
+  const btn = document.getElementById("ant-e-kicad");
+  selectLayer("kicad");
+  const typeEl = document.getElementById("ant-k-type");
+  if (typeEl) typeEl.value = "evolved";
+  syncKicadForm();
+  await doKicad("evolved", btn, numVal("ant-e-f", 2450), {
+    points: lastEvolvePoints,
+    eps_r: numVal("ant-k-epsr", 4.4),
+    h_mm: numVal("ant-k-h", 1.6),
+  }, document.getElementById("ant-k-results"));
 }
 
 async function doCancelEvolve() {
@@ -952,6 +1137,7 @@ export function init(container) {
   );
 
   // ---- KICAD panel
+  kicadCanvas = el("canvas", { class: "sim-canvas kicad-canvas", width: "384", height: "384" });
   panels.kicad = el(
     "div",
     {},
@@ -968,15 +1154,23 @@ export function init(container) {
           { id: "ant-k-type" },
           el("option", { value: "patch" }, "PATCH"),
           el("option", { value: "meander_ifa" }, "MEANDER IFA"),
-          el("option", { value: "loop" }, "LOOP")
+          el("option", { value: "mifa" }, "MIFA (JLCPCB)"),
+          el("option", { value: "loop" }, "LOOP"),
+          el("option", { value: "lib" }, "LIBRARY (RF_Antenna)"),
+          el("option", { value: "evolved" }, "LAST EVOLVED")
         )
       ),
       el("div", { class: "row" }, el("label", {}, "f MHz"), el("input", { id: "ant-k-f", type: "number", value: "2450", step: "1" })),
-      el("div", { class: "row" }, el("label", {}, "substrate εr"), el("input", { id: "ant-k-epsr", type: "number", value: "4.4", step: "0.1", min: "1" })),
-      el("div", { class: "row" }, el("label", {}, "substrate h mm"), el("input", { id: "ant-k-h", type: "number", value: "1.6", step: "0.1", min: "0.1" })),
       el(
         "div",
-        { class: "row" },
+        { class: "row", id: "ant-k-row-sub" },
+        el("label", {}, "substrate εr / h mm"),
+        el("input", { id: "ant-k-epsr", type: "number", value: "4.4", step: "0.1", min: "1" }),
+        el("input", { id: "ant-k-h", type: "number", value: "1.6", step: "0.1", min: "0.1" })
+      ),
+      el(
+        "div",
+        { class: "row", id: "ant-k-row-feed" },
         el("label", {}, "feed (patch)"),
         el(
           "select",
@@ -985,8 +1179,34 @@ export function init(container) {
           el("option", { value: "edge" }, "EDGE")
         )
       ),
-      el("div", { class: "row" }, el("label", {}, "medium (loop)"), mediumSelect("ant-k-medium")),
+      el("div", { class: "row", id: "ant-k-row-medium" }, el("label", {}, "medium (loop)"), mediumSelect("ant-k-medium")),
+      el(
+        "div",
+        { class: "row hidden", id: "ant-k-row-lib" },
+        el("label", {}, "library fp"),
+        el("select", { id: "ant-k-lib" }, el("option", { value: "" }, "(loading…)"))
+      ),
       el("div", { class: "btn-row" }, el("button", { class: "btn", id: "ant-k-run" }, "Generate"))
+    ),
+    el(
+      "div",
+      { class: "panel" },
+      el("h2", {}, "Preview"),
+      el(
+        "div",
+        { class: "btn-row layer-select" },
+        el("button", { class: "btn", id: "ant-k-prev-fp" }, "[FOOTPRINT]"),
+        el("button", { class: "btn", id: "ant-k-prev-board", disabled: true }, "[BOARD]")
+      ),
+      el("div", { class: "panel-row" }, labeledCell("component / PCB", kicadCanvas)),
+      el("div", { class: "dim" }, "F.Cu / pads · keep-out / B.Cu GND · silk / Edge.Cuts")
+    ),
+    el(
+      "div",
+      { class: "panel" },
+      el("h2", {}, "JLCPCB design parameters"),
+      el("table", { class: "stats" }, el("tbody", { id: "ant-k-params" },
+        el("tr", {}, el("td", { class: "dim" }, "generate to fill λ/4, 50 Ω, RL ≥ 10 dB, 20 mil MIFA, 6h GND"))))
     ),
     el(
       "div",
@@ -1060,23 +1280,35 @@ export function init(container) {
     el(
       "div",
       { class: "panel" },
-      el("h2", {}, "Wire evolution"),
+      el("h2", {}, "Wire / PCB evolution"),
       el("div", { class: "row" }, el("label", {}, "f MHz"), el("input", { id: "ant-e-f", type: "number", value: "2450", step: "1" })),
       el("div", { class: "row" }, el("label", {}, "medium"), mediumSelect("ant-e-medium")),
+      el(
+        "div",
+        { class: "row" },
+        el("label", {}, "topology"),
+        el(
+          "select",
+          { id: "ant-e-topo" },
+          el("option", { value: "meander" }, "WIRE (λ/2)"),
+          el("option", { value: "pcb" }, "PCB (λ/4 MIFA)")
+        )
+      ),
       el("div", { class: "row" }, el("label", {}, "hadamard order"), el("input", { id: "ant-e-order", type: "number", value: "64", min: "4", step: "4" })),
       el("div", { class: "row" }, el("label", {}, "max steps"), el("input", { id: "ant-e-steps", type: "number", value: "2000", min: "100", step: "100" })),
       el(
         "div",
         { class: "btn-row" },
         el("button", { class: "btn", id: "ant-e-run" }, "Evolve"),
-        (eCancelBtn = el("button", { class: "btn", disabled: true }, "Cancel"))
+        (eCancelBtn = el("button", { class: "btn", disabled: true }, "Cancel")),
+        el("button", { class: "btn", id: "ant-e-kicad" }, "Export KiCad")
       )
     ),
     el(
       "div",
       { class: "panel" },
       el("h2", {}, "Geometry"),
-      el("div", { class: "panel-row" }, labeledCell("best wire (x,y)", wireCanvas), patternCell)
+      el("div", { class: "panel-row" }, labeledCell("best walk (x,y)", wireCanvas), patternCell)
     ),
     el(
       "div",
@@ -1159,11 +1391,26 @@ export function init(container) {
   document.getElementById("ant-d-run").addEventListener("click", doDesign);
   document.getElementById("ant-p-run").addEventListener("click", () => doParts(false));
   document.getElementById("ant-k-run").addEventListener("click", doKicadPanel);
+  document.getElementById("ant-k-type").addEventListener("change", syncKicadForm);
+  document.getElementById("ant-k-prev-fp").addEventListener("click", () => {
+    kicadPreviewMode = "footprint";
+    syncKicadPreviewBtns();
+    drawKicadPreview();
+  });
+  document.getElementById("ant-k-prev-board").addEventListener("click", () => {
+    if (!lastKicadPreviewBoard) return;
+    kicadPreviewMode = "board";
+    syncKicadPreviewBtns();
+    drawKicadPreview();
+  });
   document.getElementById("ant-s-run").addEventListener("click", doSmith);
   document.getElementById("ant-f-run").addEventListener("click", doFields);
   fCancelBtn.addEventListener("click", doCancelFields);
   document.getElementById("ant-e-run").addEventListener("click", doEvolve);
+  document.getElementById("ant-e-kicad").addEventListener("click", doEvolveKicad);
   eCancelBtn.addEventListener("click", doCancelEvolve);
+  syncKicadForm();
+  drawKicadPreview();
 
   window.addEventListener("themechange", onThemechange);
 }

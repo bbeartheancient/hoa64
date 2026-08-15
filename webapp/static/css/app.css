@@ -290,7 +290,9 @@ canvas.sim-canvas {
 }
 /* antenna tab: smith chart needs more detail than default sim-canvas */
 .ant-cap canvas.smith-canvas { width: 384px; max-width: 100%; }
+.ant-cap canvas.kicad-canvas { width: 384px; max-width: 100%; }
 .ant-cap canvas.chart { max-width: 100%; }
+.ant-cap #ant-k-params { width: 100%; }
 .sim-fx {
   position: absolute;
   inset: 22px 0 auto 0; /* below the label */

@@ -45,7 +45,7 @@ from .routes_search import _BudgetStop
 F_MIN_MHZ = 1.0
 F_MAX_MHZ = 40000.0
 _MEDIA_KEYS = tuple(MEDIA)
-_KICAD_TYPES = ("patch", "meander_ifa", "loop")
+_KICAD_TYPES = ("patch", "meander_ifa", "mifa", "loop", "lib", "evolved")
 
 router = APIRouter(prefix="/api/antenna")
 
@@ -187,7 +187,7 @@ def kicad(req: KicadReq) -> dict:
         )
     opts: dict[str, Any] = {}
     if req.opts:
-        known = {"eps_r", "h_mm", "feed", "medium"}
+        known = {"eps_r", "h_mm", "feed", "medium", "lib_name", "points", "trace_mm"}
         extra = set(req.opts) - known
         if extra:
             raise HTTPException(
@@ -208,7 +208,32 @@ def kicad(req: KicadReq) -> dict:
     _KICAD_CACHE[token] = dict(files)
     while len(_KICAD_CACHE) > _KICAD_KEPT:
         _KICAD_CACHE.popitem(last=False)
-    return {"token": token, "files": sorted(files)}
+    # preview the first footprint and the board (if present)
+    preview = None
+    preview_board = None
+    for name, content in files.items():
+        if name.endswith(".kicad_mod") and preview is None:
+            preview = kicad_gen.preview_from_text(content)
+        elif name.endswith(".kicad_pcb") and preview_board is None:
+            preview_board = kicad_gen.preview_from_text(content)
+    if preview is None and files:
+        name, content = next(iter(files.items()))
+        preview = kicad_gen.preview_from_text(content)
+    eps = float((opts or {}).get("eps_r", 4.4))
+    hm = float((opts or {}).get("h_m", 1.6e-3))
+    params = kicad_gen.design_params(req.f_mhz * 1e6, eps, hm)
+    return _jsafe({
+        "token": token,
+        "files": sorted(files),
+        "preview": preview,
+        "preview_board": preview_board,
+        "params": params,
+    })
+
+
+@router.get("/kicad/library")
+def kicad_library() -> dict:
+    return _jsafe({"footprints": kicad_gen.list_library()})
 
 
 @router.get("/kicad/{token}")
@@ -422,6 +447,7 @@ def _run_evolve(job: Job):
         "points": np.asarray(best["points"]).tolist(),
         "resonance_note": design.get("resonance_note"),
         "pattern_png_b64": pattern_png_b64,
+        "kind": design.get("kind", "wire"),
     })
 
 
@@ -430,10 +456,10 @@ def evolve_start(req: EvolveReq) -> dict:
     if not (100.0 <= req.f_mhz <= 6000.0):
         raise HTTPException(status_code=400, detail="f_mhz must be 100..6000 MHz")
     _check_medium(req.medium)
-    if req.topology != "meander":
+    if req.topology not in ("meander", "pcb"):
         raise HTTPException(
             status_code=400,
-            detail=f"unknown topology {req.topology!r}; supported: 'meander'",
+            detail=f"unknown topology {req.topology!r}; supported: 'meander', 'pcb'",
         )
     ho = req.hadamard_order
     if not (4 <= ho <= 128) or ho & (ho - 1):

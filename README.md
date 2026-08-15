@@ -58,7 +58,8 @@ python3 -m hoa64.cli webapp
 | `parts_db.py` | Curated off‑the‑shelf antenna parts DB + matcher *(alpha — 57 catalog rows)* |
 | `fdtd.py` | 3‑D Yee FDTD Maxwell solver (air/water, polarization) *(alpha)* |
 | `antenna_evo.py` | Thin‑wire MoM evaluator + Hadamard‑seeded topology SA *(alpha)* |
-| `kicad_gen.py` | Procedural KiCad 7 footprints/boards for PCB antennas *(alpha)* |
+| `kicad_gen.py` | Procedural KiCad 7 footprints/boards for PCB antennas and RF filters *(alpha)* |
+| `rf_filter.py` | PCB RF-filter synthesis (Butterworth/Chebyshev LPF/HPF/hairpin/stub) + ABCD S-params + Hadamard SA; lumped LC/RC/CRC export planned *(alpha)* |
 | `site_survey.py` | SRTM virtual site survey: tight DEM window, path profile, 4/3‑earth Fresnel/Deygout, radio horizon, Esri satellite mosaic *(alpha)* |
 | `noise_data.py` | NOISEX‑92 noise database access + log‑mel DSP *(alpha)* |
 | `dit_noise.py` | DiT‑backbone noise classifier (adaLN‑Zero, lazy torch) *(alpha)* |
@@ -143,7 +144,19 @@ Tabs:
   E_RMS strip chart), EVOLVE anneals Hadamard‑seeded wire topologies
   scored by a real thin‑wire Method‑of‑Moments solver, SMITH sweeps
   Z_in(f) on an interactive Γ‑plane chart, and PCB types export
-  procedural KiCad files. Site survey lives on the Terrain tab.
+  procedural KiCad files (MIFA / scaled `RF_Antenna.pretty` library /
+  evolved walk, with a FOOTPRINT/BOARD canvas preview and the JLCPCB
+  λ/4·50 Ω·RL≥10 dB checklist). Site survey lives on the Terrain tab.
+- **Filter** *(ALPHA)* — PCB RF filters from the everythingRF Filter
+  Digest. Same Butterworth/Chebyshev *g*-values drive every kind:
+  stepped‑Z LPF, gap+stub HPF, hairpin BPF, open‑stub BSF. DESIGN
+  synthesises geometry and plots S21/S11 from a lossy microstrip ABCD
+  cascade (RL ≥ 10 dB, 40 dBc @ 10 % from the edge). EVOLVE
+  Hadamard‑perturbs section lengths/widths. KICAD exports
+  `.kicad_mod` / `.kicad_pcb` with a footprint preview.
+  **Now:** distributed microstrip copper. **Next:** lumped output
+  forms from the same prototype (LC ladder, RC, CRC/π, and similar
+  discrete networks) — not implemented yet.
 - **Noise** *(ALPHA — window‑level split over 15 long recordings; needs a
   larger database before real‑world generalization claims)* — DiT‑backbone
   noise classifier: train on the NOISEX‑92
