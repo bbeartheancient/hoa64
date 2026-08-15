@@ -361,10 +361,10 @@ export function init(container) {
   // ---- ANALYZE panel
   melCanvas = el("canvas", { class: "sim-canvas", width: "256", height: "256" });
   melCell = labeledCell("log-mel", melCanvas);
-  melCell.classList.add("hidden");
+  melCell.classList.add("noi-mel-cell", "hidden");
   const analyzePanel = el(
     "div",
-    { class: "panel" },
+    { class: "panel noi-analyze" },
     el("h2", {}, "Analyze"),
     el(
       "div",

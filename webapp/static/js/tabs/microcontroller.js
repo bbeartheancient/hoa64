@@ -418,10 +418,10 @@ export function init(container) {
       el("button", { class: "btn", id: "mcu-send" }, "Send Frame")),
   );
 
-  const ledMain = el("div", { class: "panel" },
+  const ledMain = el("div", { class: "panel mcu-viz" },
     el("h2", {}, "Paint"),
     el("div", { class: "panel-row" },
-      el("div", { class: "sim-cell" }, el("div", { class: "sim-label" }, "frame editor — drag paints, right-click erases"), ledCanvas)),
+      el("div", { class: "sim-cell mcu-viz-cell" }, el("div", { class: "sim-label" }, "frame editor — drag paints, right-click erases"), ledCanvas)),
     swatchRow,
     el("div", { class: "btn-row" },
       eraseBtn,
@@ -455,10 +455,10 @@ export function init(container) {
       el("br"),
       "dominated, no CSI. Occupancy hint, not imaging."),
   );
-  const meshMain = el("div", { class: "panel" },
+  const meshMain = el("div", { class: "panel mcu-viz" },
     el("h2", {}, "Field"),
     el("div", { class: "panel-row" },
-      el("div", { class: "sim-cell" }, el("div", { class: "sim-label" }, "link strength ∝ (rssi+100)/60 — accent = delta vs baseline"), meshCanvas)),
+      el("div", { class: "sim-cell mcu-viz-cell" }, el("div", { class: "sim-label" }, "link strength ∝ (rssi+100)/60 — accent = delta vs baseline"), meshCanvas)),
   );
 
   // ---- EDGE panels

@@ -288,6 +288,30 @@ canvas.sim-canvas {
   background: var(--bg);
   border: 1px solid var(--panel-line);
 }
+/* noise analyzer: the Analyze column is `1fr`, so a 1:1 sim-canvas
+   at width:100% is a viewport-tall square. Half linear size, capped
+   at half the viewport height so the spectrogram stays on screen. */
+.noi-analyze .noi-mel-cell {
+  flex: 0 0 auto;
+  width: min(50%, 50vh);
+  max-width: 50%;
+  min-width: 0;
+}
+.noi-analyze canvas.sim-canvas {
+  width: 100%;
+  max-width: 100%;
+}
+/* microcontroller LED editor (and mesh field): same 1fr square overflow */
+.mcu-viz .mcu-viz-cell {
+  flex: 0 0 auto;
+  width: min(50%, 50vh);
+  max-width: 50%;
+  min-width: 0;
+}
+.mcu-viz canvas.sim-canvas {
+  width: 100%;
+  max-width: 100%;
+}
 /* antenna tab: smith chart needs more detail than default sim-canvas */
 .ant-cap canvas.smith-canvas { width: 384px; max-width: 100%; }
 .ant-cap canvas.kicad-canvas { width: 384px; max-width: 100%; }

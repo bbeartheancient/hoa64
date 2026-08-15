@@ -850,6 +850,11 @@ def selftest() -> int:
     expect(r.status_code == 200 and "NOISE LAB" in r.text, "noise.js tab")
     expect("noi-t-opt" in r.text and "MUON" in r.text, "noise.js muon selector")
     expect("noi-class-list" in r.text, "noise.js class list")
+    expect("noi-analyze" in r.text and "noi-mel-cell" in r.text,
+           "noise.js log-mel sized inside .noi-analyze")
+    r = client.get("/css/app.css")
+    expect(".noi-analyze" in r.text and "50vh" in r.text,
+           "app.css missing noise-analyzer half-size rule")
     r = client.get("/")
     expect('data-tab="noise"' in r.text, "index noise tab button")
     print(f"PASS noise lab (19 classes, 4 RF synth, model trained: {nd['model']['trained']})")
@@ -875,6 +880,10 @@ def selftest() -> int:
     r = client.get("/js/tabs/microcontroller.js")
     expect(r.status_code == 200 and "Microcontroller Lab" in r.text,
            "microcontroller.js tab")
+    expect("mcu-viz" in r.text and "mcu-viz-cell" in r.text,
+           "microcontroller.js LED editor missing half-size class")
+    r = client.get("/css/app.css")
+    expect(".mcu-viz" in r.text, "app.css missing microcontroller half-size rule")
     r = client.get("/")
     expect('data-tab="microcontroller"' in r.text, "index mcu tab button")
     print("PASS mcu lab (firmware + edge export + tab)")
