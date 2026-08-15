@@ -119,6 +119,7 @@ def selftest() -> int:
 
     # ILS-mode engines must stream per-iteration frames ({"iter","f","best_f"})
     for eng, order in (("micromag", 4), ("tile", 4), ("gerzon", 4),
+                       ("holographic", 4), ("crown", 4),
                        ("williamson", 8), ("gs", 8), ("circulant", 4)):
         r = client.post("/api/search", json={"engine": eng, "order": order, "budget_s": 3})
         expect(r.status_code == 200, f"POST /api/search {eng} ils")
@@ -135,6 +136,14 @@ def selftest() -> int:
             gz = d["result"].get("gerzon") or {}
             expect(gz.get("aligned", {}).get("n_h2") is not None,
                    "gerzon result missing aligned H₂ counts")
+        if eng == "holographic" and d.get("result", {}).get("ok"):
+            ho = d["result"].get("holographic") or {}
+            expect(ho.get("S") is not None and ho.get("A") is not None,
+                   "holographic result missing S/A")
+        if eng == "crown" and d.get("result", {}).get("ok"):
+            cr = d["result"].get("crown") or {}
+            expect(cr.get("E_c") is not None,
+                   "crown result missing E_c")
 
     # ILS must honour time_budget, not the default 20-restart cap
     # (Search Studio H.1212 was dying at iter 20 with budget left).
@@ -305,7 +314,7 @@ def selftest() -> int:
     expect(_et(_syl(16), 1.0) < 0.2, "E_tile(H16) too large")
     print(f"PASS E_tile prior (H8=0, H16={_et(_syl(16), 1.0):.3f})")
 
-    from ..micromag import _e_z as _ez, micromag_sa as _msa_z
+    from ..micromag import _e_z as _ez, _e_h as _eh, micromag_sa as _msa_z
     expect(_ez(H8, 1.0) == 0.0, "E_z(H8) != 0 (Sylvester stride-2 is all H₂)")
     expect(_ez(_syl(16), 1.0) == 0.0, "E_z(H16) != 0")
     expect(_ez(H8, 0.0) == 0.0, "E_z(H8, lam_z=0) != 0")
@@ -318,6 +327,10 @@ def selftest() -> int:
     expect(infoz["n_h2"] + infoz["n_wall"] <= 4, "micromag_sa lam_z cell counts overflow")
     print(f"PASS E_z prior (H8=0, random={_ez(Hr8, 1.0):.3f}, "
           f"sa4 n_h2={infoz['n_h2']} E_z={infoz['E_z']:.3f})")
+    expect(_eh(H8, 1.0) == 0.0, "E_h(H8) != 0 (Hadamard saturates S_*)")
+    expect(_eh(H8, 0.0) == 0.0, "E_h(H8, lam_h=0) != 0")
+    expect(_eh(Hr8, 1.0) > 0.0, "E_h(random 8) unexpectedly 0")
+    print(f"PASS E_h prior (H8=0, random={_eh(Hr8, 1.0):.3f})")
 
     r = client.get("/api/sim/gerzon?order=16&start=sylvester")
     expect(r.status_code == 200, f"GET /api/sim/gerzon: {r.status_code}")

@@ -436,6 +436,11 @@ channel count, and FOA is a normalized H4.
   `gerzon.py` (Gerzon 1975 AB module: A-format corners → WXYZ; H₄ after
   L_F↔L_B column swap; |Z_int| trichotomy cohesive/H₂/wall; SA + ILS
   engine in Search Studio; 45°/225° pair is the dedicated cancel move),
+  `holographic.py` (S = A/(4ℓₚ²): S is the entropy of the region of
+  volume V, A is the Planck-unit area of the surface bounding V —
+  domain-wall area on the ±1 grid; SA + ILS),
+  `crown.py` (Liu 2022 spherical-crown diffraction: RS kernel, OPSF
+  occlusion utilizing, d_m / d_m-max, 2-D FFT propagate; SA + ILS),
   `rnn_hadamard.py` and `sig_predictor.py` (PyTorch LSTM fitness models),
   `game_of_hadamard.py` (construction DAG viz; `classify_orders` feeds
   /api/dag), `matrix_viz.py`

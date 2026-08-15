@@ -105,6 +105,8 @@ python3 -m hoa64.cli webapp
 | `rf_capture.py` | Live local‑radio capture for the analyzer: wifi (/proc/net/dev) + BLE (HCI ioctl) activity counters → measured‑cadence baseband envelope *(alpha)* |
 | `muon.py` | Muon/Dion3 optimizer: cursed-quintic Newton–Schulz orthogonalization of momentum (Gram-NS + row subsample) *(alpha)* |
 | `gerzon.py` | Gerzon 1975 AB module (A-format → WXYZ); H₄ after L_F↔L_B swap; H₂/wall cell SA |
+| `holographic.py` | Holographic entropy S = A/(4ℓₚ²) of volume V; A = Planck area of ∂V |
+| `crown.py` | Spherical-crown diffraction (Liu 2022 OPSF + 2-D FFT) cell SA |
 | `webapp/` | FastAPI + vanilla‑JS web GUI (see Webapp below) |
 | `rh.py` | RH |Δₙ| bound checker |
 
@@ -130,6 +132,8 @@ python3 -m hoa64.cli webapp
 - **Micromagnetic** — exchange + demagnetization + anisotropy energy
 - **Tile SA** — 2×2 H₂-cell simulated annealing
 - **Gerzon AB** — 1975 A-format → WXYZ; H₂ prior on |Z|, 45°/225° cancel move
+- **Holographic** — S = A/(4ℓₚ²): entropy of volume V from the Planck area of the surface bounding V
+- **Crown** — spherical-crown diffraction (occlusion-utilizing PSF, 2-D FFT)
 - **RNN‑guided** — LSTM scores candidate seeds before micromag descent
 - **Signature‑guided** — predicted block signature seeds from trained model
 
@@ -159,9 +163,10 @@ Tabs:
 
 - **Matrix Lab** — construct/verify matrices, pixel‑art preview, ℍ³
   transmute (row‑simplex PCA → Poincaré ball with geodesics)
-- **Search Studio** — launch max‑det/micromag/tile/Gerzon search jobs, live
-  progress over WebSocket, mid‑run retune, export to library; one Run
-  panel (matrix + E/BEST/T waveforms, Micromag‑style series toggles)
+- **Search Studio** — launch max‑det/micromag/tile/Gerzon/holographic/crown
+  search jobs, live progress over WebSocket, mid‑run retune, export to
+  library; one Run panel (matrix + E/BEST/T waveforms, Micromag‑style
+  series toggles)
 - **Micromag Sim** — annealing lab with live site‑energy/gradient/flux
   heatmaps, waveforms, and library‑goal evolution (E_goal/goal_agree).
   Flux of Sylvester (and any A⊗H₈) is a 4‑tile H.8 tessellation — the

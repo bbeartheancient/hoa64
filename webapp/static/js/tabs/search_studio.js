@@ -9,7 +9,8 @@ import { connect } from "/js/ws.js";
 import { makeStripChart } from "/js/viz/stripchart.js";
 import { retintCanvas, fillPlusOne } from "/js/theme.js";
 
-const ENGINES = ["maxdet", "micromag", "tile", "gerzon", "williamson", "gs", "circulant"];
+const ENGINES = ["maxdet", "micromag", "tile", "gerzon", "holographic", "crown",
+                 "williamson", "gs", "circulant"];
 
 let msgEl, statusEl, statsEl, previewCanvas, previewCtx;
 let waveChart, tunePanel, cancelBtn, exportBtn;
@@ -137,6 +138,13 @@ async function finishRun() {
         rows.push(statRow("gerzon H₂", `${a.n_h2}/${a.n_cells}`, a.n_h2 === a.n_cells ? "good" : ""));
         rows.push(statRow("gerzon walls", a.n_wall));
       }
+      const ho = r.holographic;
+      if (ho && ho.S != null)
+        rows.push(statRow("holo S", `${Number(ho.S).toPrecision(4)} / ${Number(ho.S_star).toPrecision(4)}`,
+          Number(ho.E_h) === 0 ? "good" : ""));
+      const cr = r.crown;
+      if (cr && cr.E_c != null)
+        rows.push(statRow("crown E_c", Number(cr.E_c).toPrecision(4)));
       statsEl.replaceChildren(...rows);
       exportBtn.style.display = "";
       exportBtn.disabled = false;

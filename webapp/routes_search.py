@@ -263,6 +263,70 @@ def _run_gerzon(job: Job):
     return H, {"best_f": best_f, "is_hadamard": bool(ok)}
 
 
+@_register("holographic")
+def _run_holographic(job: Job):
+    from .. import holographic as holo
+
+    p = job.params
+    order = p["order"]
+    rng = np.random.default_rng(p.get("seed"))
+    stop = _BudgetStop(job)
+    lam_h = float(p.get("lam_h", 1.0))
+    if p.get("mode") == "sa":
+        def _once(*, start, callback, stop_flag, rng):
+            return holo.holo_sa(
+                order,
+                T_start=p.get("T_start", 20.0),
+                cooling=p.get("cooling", 0.9995),
+                max_steps=int(p.get("max_steps", 10**9)),
+                lam_h=lam_h,
+                callback=callback,
+                stop_flag=stop_flag,
+                rng=rng,
+                start=start,
+            )
+        H, info = _reheat_sa(job, order, rng, _once)
+        return H, {"best_E": info.get("best_E"), "info": info}
+    H, best_f, ok = holo.holo_ils(
+        order, time_budget=p["budget_s"], lam_h=lam_h,
+        stop_flag=stop, rng=rng,
+        progress_callback=_sa_reporter(job, order),
+    )
+    return H, {"best_f": best_f, "is_hadamard": bool(ok)}
+
+
+@_register("crown")
+def _run_crown(job: Job):
+    from .. import crown
+
+    p = job.params
+    order = p["order"]
+    rng = np.random.default_rng(p.get("seed"))
+    stop = _BudgetStop(job)
+    lam_c = float(p.get("lam_c", 1.0))
+    if p.get("mode") == "sa":
+        def _once(*, start, callback, stop_flag, rng):
+            return crown.crown_sa(
+                order,
+                T_start=p.get("T_start", 20.0),
+                cooling=p.get("cooling", 0.9995),
+                max_steps=int(p.get("max_steps", 10**9)),
+                lam_c=lam_c,
+                callback=callback,
+                stop_flag=stop_flag,
+                rng=rng,
+                start=start,
+            )
+        H, info = _reheat_sa(job, order, rng, _once)
+        return H, {"best_E": info.get("best_E"), "info": info}
+    H, best_f, ok = crown.crown_ils(
+        order, time_budget=p["budget_s"], lam_c=lam_c,
+        stop_flag=stop, rng=rng,
+        progress_callback=_sa_reporter(job, order),
+    )
+    return H, {"best_f": best_f, "is_hadamard": bool(ok)}
+
+
 def _run_quad(job: Job, search, ils, to_hadamard):
     """Shared runner for the Williamson / Goethals-Seidel engines."""
     p = job.params
@@ -335,12 +399,24 @@ def _package_result(job: Job, H, info: dict, label: str) -> dict:
         n = int(H.shape[0])
         from ..micromag import flux_tiles
         gz = None
+        ho = None
+        cr = None
         try:
             from ..gerzon import analyze as gerzon_analyze
             gz = gerzon_analyze(H)
             gz.pop("Z_wall", None)
         except Exception:
             gz = None
+        try:
+            from ..holographic import analyze as holo_analyze
+            ho = holo_analyze(H)
+        except Exception:
+            ho = None
+        try:
+            from ..crown import analyze as crown_analyze
+            cr = crown_analyze(H)
+        except Exception:
+            cr = None
         return {
             "ok": True,
             "order": n,
@@ -348,6 +424,8 @@ def _package_result(job: Job, H, info: dict, label: str) -> dict:
             "stats": check(H, det=n <= DET_MAX),
             "flux_tiles": flux_tiles(H),
             "gerzon": gz,
+            "holographic": ho,
+            "crown": cr,
             "png_b64": base64.b64encode(matrix_png(H, 512)).decode("ascii"),
         }
     return {"ok": False, **_jsafe(info)}
@@ -518,7 +596,7 @@ async def job_ws(ws: WebSocket, job_id: str) -> None:
             elif op == "set":
                 live = job.params.setdefault("live", {})
                 for key in ("cooling", "lam_ex", "lam_ani", "lam_goal",
-                            "lam_tile", "lam_z"):
+                            "lam_tile", "lam_z", "lam_h"):
                     if msg.get(key) is not None:
                         live[key] = float(msg[key])
 

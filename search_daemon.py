@@ -109,10 +109,34 @@ def try_gerzon(order, budget=60):
     return None, None
 
 
+def try_holographic(order, budget=60):
+    from hoa64.holographic import holo_ils
+    from hoa64.hadamard import normalize
+    H, _, ok = holo_ils(order, T_start=20.0, sa_steps=5000,
+                        restarts=5, time_budget=budget,
+                        rng=np.random.default_rng())
+    if ok and H is not None:
+        return normalize(H), "holographic"
+    return None, None
+
+
+def try_crown(order, budget=60):
+    from hoa64.crown import crown_ils
+    from hoa64.hadamard import normalize
+    H, _, ok = crown_ils(order, T_start=20.0, sa_steps=5000,
+                         restarts=5, time_budget=budget,
+                         rng=np.random.default_rng())
+    if ok and H is not None:
+        return normalize(H), "crown"
+    return None, None
+
+
 ENGINES = [
     ("micromag", try_micromag),
     ("tile_swap", try_tile),
     ("gerzon", try_gerzon),
+    ("holographic", try_holographic),
+    ("crown", try_crown),
     ("gs_circulant", try_gs_circulant),
     ("williamson", try_williamson),
     ("maxdet", try_maxdet),
