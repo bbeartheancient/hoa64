@@ -73,6 +73,10 @@ def _verts_to_positions(verts: list[tuple[float, float, float]]) -> list[dict]:
 def _preset_positions(name: str) -> list[dict] | None:
     if name == "ring4":
         return [{"az": float(a), "el": 0.0} for a in (0, 90, 180, 270)]
+    if name == "square45":
+        # Gerzon A-format corners: Lf=45, Lb=135, Rb=225, Rf=315.
+        # 45° and 225° are antipodes — they cancel in X,Y and add in W,Z.
+        return [{"az": float(a), "el": 0.0} for a in (45, 135, 225, 315)]
     if name == "ring8":
         return [{"az": float(a), "el": 0.0} for a in range(0, 360, 45)]
     if name == "dome8":

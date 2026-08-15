@@ -1,7 +1,7 @@
 """Search API routes — live-streamed heuristic Hadamard search (Phase 2).
 
-The long-running engines (max-det ILS, micromag SA, tile SA, Williamson /
-Goethals-Seidel PSD descent, circulant PSD descent) run on the JobManager
+The long-running engines (max-det ILS, micromag SA, tile SA, Gerzon AB,
+Williamson / Goethals-Seidel PSD descent, circulant PSD descent) run on the JobManager
 thread pool (`jobs.py`); their progress callbacks feed `report()`, which
 queues frames for the WebSocket at /ws/job/{job_id} and appends them to
 `job.history` for mid-run replay.
@@ -191,6 +191,35 @@ def _run_tile(job: Job):
     return H, {"best_f": best_f, "is_hadamard": bool(ok)}
 
 
+@_register("gerzon")
+def _run_gerzon(job: Job):
+    from .. import gerzon
+
+    p = job.params
+    order = p["order"]
+    rng = np.random.default_rng(p.get("seed"))
+    stop = _BudgetStop(job)
+    lam_z = float(p.get("lam_z", 1.0))
+    if p.get("mode") == "sa":
+        H, info = gerzon.gerzon_sa(
+            order,
+            T_start=p.get("T_start", 20.0),
+            cooling=p.get("cooling", 0.9995),
+            max_steps=int(p.get("max_steps", 10**9)),
+            lam_z=lam_z,
+            callback=_sa_reporter(job, order),
+            stop_flag=stop,
+            rng=rng,
+        )
+        return H, {"best_E": info.get("best_E"), "info": info}
+    H, best_f, ok = gerzon.gerzon_ils(
+        order, time_budget=p["budget_s"], lam_z=lam_z,
+        stop_flag=stop, rng=rng,
+        progress_callback=_sa_reporter(job, order),
+    )
+    return H, {"best_f": best_f, "is_hadamard": bool(ok)}
+
+
 def _run_quad(job: Job, search, ils, to_hadamard):
     """Shared runner for the Williamson / Goethals-Seidel engines."""
     p = job.params
@@ -262,12 +291,16 @@ def _package_result(job: Job, H, info: dict, label: str) -> dict:
         job.matrix = H  # kept off the JSON result; /export re-reads it
         n = int(H.shape[0])
         from ..micromag import flux_tiles
+        from ..gerzon import analyze as gerzon_analyze
+        gz = gerzon_analyze(H)
+        gz.pop("Z_wall", None)  # keep the JSON light; maps stay on the engine
         return {
             "ok": True,
             "order": n,
             "engine": label,
             "stats": check(H, det=n <= DET_MAX),
             "flux_tiles": flux_tiles(H),
+            "gerzon": gz,
             "png_b64": base64.b64encode(matrix_png(H, 512)).decode("ascii"),
         }
     return {"ok": False, **_jsafe(info)}

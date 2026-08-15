@@ -115,8 +115,8 @@ def selftest() -> int:
     print(f"PASS search micromag sa(4) — {len(progress)} progress frames")
 
     # ILS-mode engines must stream per-iteration frames ({"iter","f","best_f"})
-    for eng, order in (("micromag", 4), ("tile", 4), ("williamson", 8),
-                       ("gs", 8), ("circulant", 4)):
+    for eng, order in (("micromag", 4), ("tile", 4), ("gerzon", 4),
+                       ("williamson", 8), ("gs", 8), ("circulant", 4)):
         r = client.post("/api/search", json={"engine": eng, "order": order, "budget_s": 3})
         expect(r.status_code == 200, f"POST /api/search {eng} ils")
         jid = r.json()["job_id"]
@@ -128,6 +128,10 @@ def selftest() -> int:
         expect(all("best_f" in m for m in it_frames),
                f"{eng} iter frames missing best_f")
         print(f"PASS search {eng} ils({order}) — {len(it_frames)} iteration frames")
+        if eng == "gerzon" and d.get("result", {}).get("ok"):
+            gz = d["result"].get("gerzon") or {}
+            expect(gz.get("aligned", {}).get("n_h2") is not None,
+                   "gerzon result missing aligned H₂ counts")
 
     r = client.post(
         "/api/search", json={"engine": "tile", "order": 128, "mode": "sa", "budget_s": 60}
@@ -365,6 +369,13 @@ def selftest() -> int:
     )
     expect(d["cond"] > 0 and d["n_channels"] == 16, "speakers cond/n_channels")
     print("PASS hoa speakers ring8 order 3")
+
+    r = client.post("/api/hoa/speakers", json={"preset": "square45", "order": 1})
+    d = r.json()
+    expect(r.status_code == 200 and len(d["positions"]) == 4, "speakers square45")
+    az = sorted(round(p["az"] % 360, 1) for p in d["positions"])
+    expect(az == [45.0, 135.0, 225.0, 315.0], f"square45 az {az}")
+    print("PASS hoa speakers square45 (Gerzon A-format corners)")
 
     r = client.post(
         "/api/hoa/scene",

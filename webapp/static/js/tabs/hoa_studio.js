@@ -16,7 +16,7 @@ import { makeHeatmap } from "/js/viz/heatmap.js";
 import { themeColor, currentTheme, themeRamp, getSetting, setSetting } from "/js/theme.js";
 import { makePostPipeline, hexToRgb01 } from "/js/viz/shaders.js";
 
-const PRESETS = ["ring4", "ring8", "dome8", "icosa", "dodeca", "grid"];
+const PRESETS = ["ring4", "square45", "ring8", "dome8", "icosa", "dodeca", "grid"];
 const MAX_SOURCES = 4;
 
 // theme → post-processing mode for the sphere view

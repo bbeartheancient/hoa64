@@ -6,6 +6,7 @@ actively SEARCHES for new matrices using every available engine:
   - micromag descent (exchange + demag + anisotropy)
   - GS circulant FFT search
   - Williamson FFT search
+  - Gerzon AB cell SA (H₂ prior in WXYZ)
   - pure max‑det descent
 
 Runs with longer time budgets per order, designed for overnight operation.
@@ -97,9 +98,21 @@ def try_tile(order, budget=60):
     return None, None
 
 
+def try_gerzon(order, budget=60):
+    from hoa64.gerzon import gerzon_ils
+    from hoa64.hadamard import normalize
+    H, _, ok = gerzon_ils(order, T_start=20.0, sa_steps=5000,
+                          restarts=5, time_budget=budget,
+                          rng=np.random.default_rng())
+    if ok and H is not None:
+        return normalize(H), "gerzon"
+    return None, None
+
+
 ENGINES = [
     ("micromag", try_micromag),
     ("tile_swap", try_tile),
+    ("gerzon", try_gerzon),
     ("gs_circulant", try_gs_circulant),
     ("williamson", try_williamson),
     ("maxdet", try_maxdet),

@@ -9,7 +9,7 @@ import { connect } from "/js/ws.js";
 import { makeStripChart } from "/js/viz/stripchart.js";
 import { retintCanvas } from "/js/theme.js";
 
-const ENGINES = ["maxdet", "micromag", "tile", "williamson", "gs", "circulant"];
+const ENGINES = ["maxdet", "micromag", "tile", "gerzon", "williamson", "gs", "circulant"];
 
 let msgEl, statusEl, statsEl, previewCanvas, previewCtx;
 let waveChart, tunePanel, cancelBtn, exportBtn;
@@ -127,6 +127,12 @@ async function finishRun() {
       ];
       if (s.det_log10 !== undefined && s.det_log10 !== null)
         rows.push(statRow("det_log10", s.det_log10.toFixed(2)));
+      const gz = r.gerzon;
+      if (gz && gz.aligned) {
+        const a = gz.aligned;
+        rows.push(statRow("gerzon H₂", `${a.n_h2}/${a.n_cells}`, a.n_h2 === a.n_cells ? "good" : ""));
+        rows.push(statRow("gerzon walls", a.n_wall));
+      }
       statsEl.replaceChildren(...rows);
       exportBtn.style.display = "";
       exportBtn.disabled = false;

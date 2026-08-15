@@ -103,7 +103,7 @@ python3 -m hoa64.cli webapp
 | `noise_data.py` | NOISEX‑92 access + 4 synthesized RF baseband classes (BLE/WiFi/Zigbee/LoRa) + log‑mel DSP *(alpha)* |
 | `dit_noise.py` | DiT‑backbone noise classifier (adaLN‑Zero, Muon/AdamW, lazy torch) *(alpha)* |
 | `muon.py` | Muon/Dion3 optimizer: cursed-quintic Newton–Schulz orthogonalization of momentum (Gram-NS + row subsample) *(alpha)* |
-| `darpa_challenges.py` | DARPA's 23 mathematical challenges + honest tooling alignment |
+| `gerzon.py` | Gerzon 1975 AB module (A-format → WXYZ); H₄ after L_F↔L_B swap; H₂/wall cell SA |
 | `webapp/` | FastAPI + vanilla‑JS web GUI (see Webapp below) |
 | `rh.py` | RH |Δₙ| bound checker |
 
@@ -128,6 +128,7 @@ python3 -m hoa64.cli webapp
 - **General‑circulant GS** — 4 sequences, no symmetry constraint
 - **Micromagnetic** — exchange + demagnetization + anisotropy energy
 - **Tile SA** — 2×2 H₂-cell simulated annealing
+- **Gerzon AB** — 1975 A-format → WXYZ; H₂ prior on |Z|, 45°/225° cancel move
 - **RNN‑guided** — LSTM scores candidate seeds before micromag descent
 - **Signature‑guided** — predicted block signature seeds from trained model
 
@@ -157,7 +158,7 @@ Tabs:
 
 - **Matrix Lab** — construct/verify matrices, pixel‑art preview, ℍ³
   transmute (row‑simplex PCA → Poincaré ball with geodesics)
-- **Search Studio** — launch max‑det/micromag/tile search jobs, live
+- **Search Studio** — launch max‑det/micromag/tile/Gerzon search jobs, live
   progress over WebSocket, mid‑run retune, export to library; one Run
   panel (matrix + E/BEST/T waveforms, Micromag‑style series toggles)
 - **Micromag Sim** — annealing lab with live site‑energy/gradient/flux

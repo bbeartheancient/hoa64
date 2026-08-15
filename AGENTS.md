@@ -407,6 +407,9 @@ channel count, and FOA is a normalized H4.
   optional
   `goal`/`lam_goal` attraction — E_goal = lam_goal per entry disagreeing
   with ±goal, sign fixed at start since global sign is gauge), `tile_search.py` (2×2 H2-cell SA),
+  `gerzon.py` (Gerzon 1975 AB module: A-format corners → WXYZ; H₄ after
+  L_F↔L_B column swap; |Z_int| trichotomy cohesive/H₂/wall; SA + ILS
+  engine in Search Studio; 45°/225° pair is the dedicated cancel move),
   `rnn_hadamard.py` and `sig_predictor.py` (PyTorch LSTM fitness models),
   `game_of_hadamard.py` (construction DAG viz; `classify_orders` feeds
   /api/dag), `matrix_viz.py`

@@ -16,9 +16,10 @@ iff H is a Hadamard matrix.
 
 Constructions: Sylvester (orders 2^k), Paley I (q + 1, q == 3 mod 4 prime),
 Paley II (2(q + 1), q == 1 mod 4 prime), and Kronecker products of these.
-The channel-count coincidence with ambisonics is real: FOA is a normalized
-H4 (tetrahedral A/B transform) and N = 1, 3, 7 give Hadamard orders 4, 16,
-64 (hoa64 = Sylvester H-64).
+The channel-count coincidence with ambisonics is real: Gerzon's 1975 AB
+module is a Hadamard matrix (rows WXYZ, columns L_B L_F R_F R_B); swapping
+the L_F and L_B columns yields Sylvester H₄.  N = 1, 3, 7 give orders
+4, 16, 64 (hoa64 = Sylvester H-64).  See ``gerzon.py``.
 
 Smallest open order is 668 = 4 * 167 (167 prime == 7 mod 32).  The best known
 approximation is Eliahou's 64-modular H(668) with H H^T == 668 I (mod 64).
