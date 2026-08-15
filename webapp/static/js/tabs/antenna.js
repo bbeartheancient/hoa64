@@ -20,6 +20,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { connect } from "/js/ws.js";
 import { makeStripChart } from "/js/viz/stripchart.js";
 import { retintCanvas, themeColor } from "/js/theme.js";
+import { drawKicadPrims } from "/js/kicad_layers.js";
 
 const LAYERS = { design: "DESIGN", parts: "PARTS", fields: "FIELDS", evolve: "EVOLVE", kicad: "KICAD", smith: "SMITH" };
 // entry.type → kicad design_type (first substring match wins)
@@ -341,63 +342,12 @@ async function loadKicadLibrary() {
 
 function drawKicadPreview() {
   if (!kicadCanvas) return;
-  const ctx = kicadCanvas.getContext("2d");
-  const W = kicadCanvas.width, H = kicadCanvas.height;
-  ctx.fillStyle = themeColor("bg");
-  ctx.fillRect(0, 0, W, H);
   const prev = (kicadPreviewMode === "board" && lastKicadPreviewBoard)
     ? lastKicadPreviewBoard : lastKicadPreview;
-  if (!prev || !prev.prims || !prev.prims.length) {
-    ctx.fillStyle = themeColor("dim");
-    ctx.font = "11px monospace";
-    ctx.fillText("no footprint yet", 8, H / 2);
-    return;
-  }
-  const b = prev.bbox;
-  const span = Math.max(b.xmax - b.xmin, b.ymax - b.ymin, 1e-3);
-  const sc = (Math.min(W, H) - 36) / span;
-  const x0 = (W - (b.xmax - b.xmin) * sc) / 2 - b.xmin * sc;
-  const y0 = (H - (b.ymax - b.ymin) * sc) / 2 - b.ymin * sc;
-  const X = (x) => x0 + x * sc;
-  const Y = (y) => H - (y0 + y * sc);
-  const col = (layer, kind) => {
-    if (kind === "keepout") return themeColor("accent");
-    if (layer && layer.includes("Silk")) return themeColor("dim");
-    if (layer && layer.includes("Edge")) return themeColor("accent");
-    if (layer && (layer.includes("B.Cu") || layer === "keepout")) return themeColor("accent");
-    return themeColor("fg");
-  };
-  for (const p of prev.prims) {
-    ctx.strokeStyle = col(p.layer, p.kind);
-    ctx.fillStyle = col(p.layer, p.kind);
-    ctx.lineWidth = Math.max(1, (p.w || 0.15) * sc);
-    if (p.kind === "line" && p.a && p.b) {
-      ctx.beginPath(); ctx.moveTo(X(p.a[0]), Y(p.a[1])); ctx.lineTo(X(p.b[0]), Y(p.b[1])); ctx.stroke();
-    } else if ((p.kind === "poly" || p.kind === "keepout" || p.kind === "zone") && p.pts) {
-      ctx.globalAlpha = p.kind === "keepout" ? 0.22 : (p.kind === "zone" ? 0.18 : 0.7);
-      ctx.beginPath();
-      p.pts.forEach((pt, i) => (i ? ctx.lineTo(X(pt[0]), Y(pt[1])) : ctx.moveTo(X(pt[0]), Y(pt[1]))));
-      ctx.closePath();
-      ctx.fill();
-      ctx.globalAlpha = 1;
-      ctx.stroke();
-    } else if (p.kind === "rect" && p.a && p.b) {
-      ctx.strokeRect(X(Math.min(p.a[0], p.b[0])), Y(Math.max(p.a[1], p.b[1])),
-        Math.abs(p.b[0] - p.a[0]) * sc, Math.abs(p.b[1] - p.a[1]) * sc);
-    } else if (p.kind === "circle" && p.c) {
-      ctx.beginPath(); ctx.arc(X(p.c[0]), Y(p.c[1]), (p.r || 0) * sc, 0, Math.PI * 2); ctx.stroke();
-    } else if (p.kind === "pad" && p.c) {
-      const sx = (p.size ? p.size[0] : 1) * sc, sy = (p.size ? p.size[1] : 1) * sc;
-      ctx.fillRect(X(p.c[0]) - sx / 2, Y(p.c[1]) - sy / 2, sx, sy);
-    }
-  }
-  const wMm = b.xmax - b.xmin, hMm = b.ymax - b.ymin;
-  ctx.fillStyle = themeColor("dim");
-  ctx.font = "10px monospace";
-  ctx.fillText(
-    `${kicadPreviewMode}  ${wMm.toFixed(2)} × ${hMm.toFixed(2)} mm  (${prev.prims.length} prims)`,
-    8, H - 8
-  );
+  const cap = prev && prev.bbox
+    ? `${kicadPreviewMode}  ${(prev.bbox.xmax - prev.bbox.xmin).toFixed(2)} × ${(prev.bbox.ymax - prev.bbox.ymin).toFixed(2)} mm`
+    : "";
+  drawKicadPrims(kicadCanvas, prev, { caption: cap });
 }
 
 function renderDesign(d) {
@@ -1199,7 +1149,7 @@ export function init(container) {
         el("button", { class: "btn", id: "ant-k-prev-board", disabled: true }, "[BOARD]")
       ),
       el("div", { class: "panel-row" }, labeledCell("component / PCB", kicadCanvas)),
-      el("div", { class: "dim" }, "F.Cu / pads · keep-out / B.Cu GND · silk / Edge.Cuts")
+      el("div", { class: "dim" }, "KiCad layers (not themed): red F.Cu · blue B.Cu · green In1 · orange In2")
     ),
     el(
       "div",

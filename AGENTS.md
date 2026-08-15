@@ -100,6 +100,9 @@ channel count, and FOA is a normalized H4.
   /train DiT job, /analyze WAV-path or live-mic classify → mel PNG +
   probs), `static/vendor/`
   (pinned three.js 0.170.0 + OrbitControls, import map in index.html),
+  `static/js/kicad_layers.js` (fixed copper palette for all KiCad
+  previews — red F.Cu, blue B.Cu, green In1.Cu, orange In2.Cu;
+  theme LUT is bypassed; W=½ edges unfilled),
   `static/css/themes.css` + `static/js/theme.js` (Phase 4.5/6/7: seven
   runtime retro-monitor themes — mono/P1/AMB/PLS/DMG/CGB/VGA —
   `data-theme` + localStorage, `recolorCanvas` LUT for server PNGs (theme

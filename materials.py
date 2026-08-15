@@ -91,18 +91,18 @@ def _layer_of(p: int) -> str:
 MAP_KEY = {
     "stack": "2-layer: copper follows H (±1); fill colour is flux P=2W−1",
     "fill": [
-        {"polarity": 1, "w": 1.0, "swatch": "fg",
-         "name": "+", "means": "vertex — two walls (W=1)"},
-        {"polarity": 0, "w": 0.5, "swatch": "dim",
-         "name": "0", "means": "edge — one wall (W=½); dielectric gap, not a 3rd net"},
-        {"polarity": -1, "w": 0.0, "swatch": "accent",
-         "name": "−", "means": "bulk — no wall (W=0)"},
+        {"polarity": 1, "w": 1.0, "swatch": "F.Cu", "layer": "F.Cu",
+         "name": "F.Cu", "means": "top copper (red) — H=+1 face"},
+        {"polarity": -1, "w": 0.0, "swatch": "B.Cu", "layer": "B.Cu",
+         "name": "B.Cu", "means": "bottom copper (blue) — H=−1 reverse"},
+        {"polarity": 0, "w": 0.5, "swatch": "",
+         "name": "gap", "means": "W=½ edge — unfilled dielectric, not a 3rd net"},
     ],
     "copper": [
-        {"layer": "F.Cu", "h": 1, "name": "face",
-         "means": "H=+1 top / face yarn"},
-        {"layer": "B.Cu", "h": -1, "name": "reverse",
-         "means": "H=−1 bottom / reverse yarn"},
+        {"layer": "F.Cu", "h": 1, "name": "F.Cu / face",
+         "means": "red — H=+1 top yarn"},
+        {"layer": "B.Cu", "h": -1, "name": "B.Cu / reverse",
+         "means": "blue — H=−1 bottom yarn"},
     ],
     "feeds": [
         {"name": "○ F# / B#", "swatch": "fg",
@@ -192,8 +192,7 @@ def preview_from_layout(layout: dict) -> dict:
 def _sheet(H: np.ndarray, P: np.ndarray, pitch: float, gap_frac: float):
     """n×n cells: copper layer from H, fill polarity from flux P.
 
-    Edge cells (P=0, W=½) keep the H copper layer but shrink so the
-    dielectric street of the flux tile is visible on a 2-layer gerber.
+    Edge cells (P=0, W=½) are omitted — unfilled dielectric, not copper.
     """
     n = H.shape[0]
     cell = pitch * (1.0 - float(gap_frac))
@@ -202,12 +201,13 @@ def _sheet(H: np.ndarray, P: np.ndarray, pitch: float, gap_frac: float):
     for i in range(n):
         for j in range(n):
             p = int(P[i, j])
+            if p == 0:
+                continue
             h = int(H[i, j])
-            sz = cell * (0.45 if p == 0 else 1.0)
             rects.append({
                 "x": origin + j * pitch,
                 "y": origin + (n - 1 - i) * pitch,
-                "w": sz, "h": sz,
+                "w": cell, "h": cell,
                 "layer": _layer_of_H(h),
                 "polarity": p,
                 "h_sign": h,
@@ -245,13 +245,13 @@ def cloth(H, pitch_mm: float = 1.0, gap_frac: float = 0.18) -> dict:
     n = H.shape[0]
     pitch = float(pitch_mm)
     rects, origin, cell = _sheet(H, P, pitch, gap_frac)
-    face_lab, n_face = _components(H == 1)
-    rev_lab, n_rev = _components(H == -1)
+    face_lab, n_face = _components((H == 1) & (P != 0))
+    rev_lab, n_rev = _components((H == -1) & (P != 0))
     st = _polarity_stats(P)
     pads = []
     for name, mask, layer in (
-        ("F", H[:, 0] == 1, "F.Cu"),
-        ("B", H[:, 0] == -1, "B.Cu"),
+        ("F", (H[:, 0] == 1) & (P[:, 0] != 0), "F.Cu"),
+        ("B", (H[:, 0] == -1) & (P[:, 0] != 0), "B.Cu"),
     ):
         hits = np.argwhere(mask)
         if len(hits):
@@ -292,25 +292,29 @@ def touchpad(H, pitch_mm: float = 2.0, gap_frac: float = 0.2) -> dict:
     n = H.shape[0]
     pitch = float(pitch_mm)
     rects, origin, cell = _sheet(H, P, pitch, gap_frac)
-    face_lab, n_face = _components(H == 1)
-    rev_lab, n_rev = _components(H == -1)
+    face_lab, n_face = _components((H == 1) & (P != 0))
+    rev_lab, n_rev = _components((H == -1) & (P != 0))
     st = _polarity_stats(P)
     W = flux_map(H)
     caps = []
     for i in range(n):
         for j in range(n - 1):
-            if H[i, j] == H[i, j + 1]:
+            if H[i, j] == H[i, j + 1] or P[i, j] == 0 or P[i, j + 1] == 0:
                 continue
             a, b = (int(face_lab[i, j]), int(rev_lab[i, j + 1])) if H[i, j] == 1 \
                 else (int(face_lab[i, j + 1]), int(rev_lab[i, j]))
+            if a < 0 or b < 0:
+                continue
             caps.append({"face": a, "reverse": b, "dir": "h",
                          "w": [float(W[i, j]), float(W[i, j + 1])]})
     for i in range(n - 1):
         for j in range(n):
-            if H[i, j] == H[i + 1, j]:
+            if H[i, j] == H[i + 1, j] or P[i, j] == 0 or P[i + 1, j] == 0:
                 continue
             a, b = (int(face_lab[i, j]), int(rev_lab[i + 1, j])) if H[i, j] == 1 \
                 else (int(face_lab[i + 1, j]), int(rev_lab[i, j]))
+            if a < 0 or b < 0:
+                continue
             caps.append({"face": a, "reverse": b, "dir": "v",
                          "w": [float(W[i, j]), float(W[i + 1, j])]})
     pads = []
@@ -320,11 +324,12 @@ def touchpad(H, pitch_mm: float = 2.0, gap_frac: float = 0.2) -> dict:
     ):
         for eid in range(n_el):
             cells = np.argwhere(lab == eid)
-            # snap to a real cell — the geometric centroid of an L-shaped
-            # electrode can sit *between* cells and reads as a stray point
-            cy, cx = cells.mean(axis=0)
-            k = int(np.argmin((cells[:, 0] - cy) ** 2 + (cells[:, 1] - cx) ** 2))
-            i, j = int(cells[k, 0]), int(cells[k, 1])
+            # prefer a copper cell (P≠0); W=½ cells are unfilled gaps
+            copper = np.array([c for c in cells if int(P[int(c[0]), int(c[1])]) != 0])
+            pick = copper if len(copper) else cells
+            cy, cx = pick.mean(axis=0)
+            k = int(np.argmin((pick[:, 0] - cy) ** 2 + (pick[:, 1] - cx) ** 2))
+            i, j = int(pick[k, 0]), int(pick[k, 1])
             pads.append({
                 "name": f"{prefix}{eid}",
                 "x": origin + j * pitch,

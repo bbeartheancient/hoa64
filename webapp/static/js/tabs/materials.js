@@ -5,7 +5,7 @@
 // POST /api/materials/design  → preview + stats
 // POST /api/materials/kicad   → .kicad_mod / .kicad_pcb
 
-import { themeColor } from "/js/theme.js";
+import { drawKicadPrims, KICAD_CU, KICAD_KEY } from "/js/kicad_layers.js";
 
 const LAYERS = { cloth: "CLOTH", touchpad: "TOUCH", metamaterial: "META" };
 
@@ -97,10 +97,13 @@ function renderStats(d) {
   renderKey(d.key);
 }
 
-function swatchColor(name) {
-  if (name === "fg") return themeColor("fg");
-  if (name === "accent") return themeColor("accent") || themeColor("dim");
-  return themeColor("dim");
+function swatchColor(name, layer) {
+  if (layer && KICAD_CU[layer]) return KICAD_CU[layer];
+  if (name === "F.Cu" || name === "fg") return KICAD_CU["F.Cu"];
+  if (name === "B.Cu" || name === "accent") return KICAD_CU["B.Cu"];
+  if (name === "In1.Cu") return KICAD_CU["In1.Cu"];
+  if (name === "In2.Cu") return KICAD_CU["In2.Cu"];
+  return "transparent";
 }
 
 function renderKey(key) {
@@ -115,101 +118,24 @@ function renderKey(key) {
     kids.push(el("div", { class: "sim-label", style: "margin-top:8px" }, title));
     for (const r of rows || []) {
       const sw = el("span", {
-        style: `display:inline-block;width:12px;height:12px;margin-right:8px;vertical-align:middle;background:${swatchColor(r.swatch || (r.layer === "B.Cu" ? "accent" : "fg"))};border:1px solid ${themeColor("dim")}`,
+        style: `display:inline-block;width:12px;height:12px;margin-right:8px;vertical-align:middle;background:${swatchColor(r.swatch, r.layer)};border:1px solid #6a6e74`,
       });
       kids.push(el("div", { class: "row" }, sw,
         el("span", {}, `${r.name}  ${r.means}`)));
     }
   };
-  block("FILL — flux tile P = 2W−1", key.fill);
+  block("COPPER — KiCad layers (not themed)", KICAD_KEY.filter((r) => r.layer));
   block("COPPER — 2-layer stack", key.copper);
+  kids.push(el("div", { class: "row" },
+    el("span", { style: "display:inline-block;width:12px;height:12px;margin-right:8px;border:1px solid #6a6e74" }),
+    el("span", {}, "0 / gap  W=½ edge — unfilled dielectric")));
   if (key.feeds && key.feeds.length) block("MARKS — electrode feeds", key.feeds);
   host.replaceChildren(...kids);
 }
 
 function drawPreview() {
   if (!previewCanvas) return;
-  const ctx = previewCanvas.getContext("2d");
-  const W = previewCanvas.width, H = previewCanvas.height;
-  ctx.fillStyle = themeColor("bg");
-  ctx.fillRect(0, 0, W, H);
-  const prev = last && last.preview;
-  if (!prev || !prev.prims || !prev.prims.length) {
-    ctx.fillStyle = themeColor("dim");
-    ctx.font = "11px monospace";
-    ctx.fillText("generate a layout", 8, H / 2);
-    return;
-  }
-  const b = prev.bbox;
-  const span = Math.max(b.xmax - b.xmin, b.ymax - b.ymin, 1e-3);
-  const sc = (Math.min(W, H) - 36) / span;
-  const x0 = (W - (b.xmax - b.xmin) * sc) / 2 - b.xmin * sc;
-  const y0 = (H - (b.ymax - b.ymin) * sc) / 2 - b.ymin * sc;
-  const X = (x) => x0 + x * sc;
-  const Y = (y) => H - (y0 + y * sc);
-  const col = (p) => {
-    // ternary flux: + = fg, 0 = dim (olive in the capture), − = accent
-    if (p.polarity === 1) return themeColor("fg");
-    if (p.polarity === -1) return themeColor("accent") || themeColor("dim");
-    if (p.polarity === 0) return themeColor("dim");
-    if (p.layer && p.layer.includes("B.Cu")) return themeColor("accent") || themeColor("dim");
-    if (p.layer && p.layer.includes("Silk")) return themeColor("dim");
-    return themeColor("fg");
-  };
-  for (const p of prev.prims) {
-    ctx.globalAlpha = p.polarity === 0 ? 0.7 : 0.92;
-    ctx.fillStyle = col(p);
-    ctx.strokeStyle = col(p);
-    if (p.kind === "rect" && p.a && p.b) {
-      ctx.fillRect(X(Math.min(p.a[0], p.b[0])), Y(Math.max(p.a[1], p.b[1])),
-        Math.abs(p.b[0] - p.a[0]) * sc, Math.abs(p.b[1] - p.a[1]) * sc);
-    } else if (p.kind === "pad" && p.c && p.role === "feed") {
-      const r = Math.max(2.5, Math.min(p.size ? p.size[0] : 0.3, p.size ? p.size[1] : 0.3) * sc * 0.5);
-      ctx.beginPath();
-      ctx.arc(X(p.c[0]), Y(p.c[1]), r, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = themeColor("bg");
-      ctx.lineWidth = 1;
-      ctx.stroke();
-      if (p.name) {
-        ctx.fillStyle = themeColor("fg");
-        ctx.font = "9px monospace";
-        ctx.fillText(p.name, X(p.c[0]) + r + 2, Y(p.c[1]) + 3);
-      }
-    } else if (p.kind === "pad" && p.c) {
-      const sx = (p.size ? p.size[0] : 1) * sc, sy = (p.size ? p.size[1] : 1) * sc;
-      ctx.fillRect(X(p.c[0]) - sx / 2, Y(p.c[1]) - sy / 2, sx, sy);
-    } else if (p.kind === "circle" && p.c) {
-      ctx.beginPath(); ctx.arc(X(p.c[0]), Y(p.c[1]), (p.r || 0) * sc, 0, Math.PI * 2); ctx.stroke();
-    }
-    ctx.globalAlpha = 1;
-  }
-  // map key drawn on the canvas (always visible with the tile)
-  const key = (last && last.key && last.key.fill) || [
-    { polarity: 1, swatch: "fg", name: "+" },
-    { polarity: 0, swatch: "dim", name: "0" },
-    { polarity: -1, swatch: "accent", name: "−" },
-  ];
-  const kx = 8, ky = H - 44;
-  ctx.fillStyle = themeColor("bg");
-  ctx.globalAlpha = 0.82;
-  ctx.fillRect(kx - 4, ky - 12, 200, 40);
-  ctx.globalAlpha = 1;
-  ctx.font = "10px monospace";
-  let x = kx;
-  for (const row of key) {
-    ctx.fillStyle = swatchColor(row.swatch);
-    ctx.fillRect(x, ky, 10, 10);
-    ctx.strokeStyle = themeColor("dim");
-    ctx.strokeRect(x, ky, 10, 10);
-    ctx.fillStyle = themeColor("fg");
-    const label = row.polarity === 1 ? "+ W=1" : row.polarity === 0 ? "0 W=½" : "− W=0";
-    ctx.fillText(label, x + 14, ky + 9);
-    x += 66;
-  }
-  ctx.fillStyle = themeColor("dim");
-  ctx.fillText("2-layer copper: F.Cu = H=+1 face · B.Cu = H=−1 reverse · 0 = gap",
-    kx, ky + 24);
+  drawKicadPrims(previewCanvas, last && last.preview, { empty: "generate a layout" });
 }
 
 async function doDesign() {

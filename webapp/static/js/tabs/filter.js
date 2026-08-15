@@ -7,6 +7,7 @@
 import { connect } from "/js/ws.js";
 import { makeStripChart } from "/js/viz/stripchart.js";
 import { themeColor } from "/js/theme.js";
+import { drawKicadPrims } from "/js/kicad_layers.js";
 
 const LAYERS = { design: "DESIGN", evolve: "EVOLVE", kicad: "KICAD" };
 
@@ -175,44 +176,7 @@ function drawSweep() {
 
 function drawPreview(preview) {
   if (!kCanvas) return;
-  const ctx = kCanvas.getContext("2d");
-  const W = kCanvas.width, H = kCanvas.height;
-  ctx.fillStyle = themeColor("bg");
-  ctx.fillRect(0, 0, W, H);
-  const prev = preview || (lastPacked && lastPacked.preview);
-  if (!prev || !prev.prims || !prev.prims.length) {
-    ctx.fillStyle = themeColor("dim");
-    ctx.font = "11px monospace";
-    ctx.fillText("no footprint yet", 8, H / 2);
-    return;
-  }
-  const b = prev.bbox;
-  const span = Math.max(b.xmax - b.xmin, b.ymax - b.ymin, 1e-3);
-  const sc = (Math.min(W, H) - 36) / span;
-  const x0 = (W - (b.xmax - b.xmin) * sc) / 2 - b.xmin * sc;
-  const y0 = (H - (b.ymax - b.ymin) * sc) / 2 - b.ymin * sc;
-  const X = (x) => x0 + x * sc;
-  const Y = (y) => H - (y0 + y * sc);
-  for (const p of prev.prims) {
-    ctx.strokeStyle = themeColor("fg");
-    ctx.fillStyle = themeColor("fg");
-    if (p.kind === "rect" && p.a && p.b) {
-      const x = X(Math.min(p.a[0], p.b[0]));
-      const y = Y(Math.max(p.a[1], p.b[1]));
-      ctx.fillRect(x, y, Math.abs(p.b[0] - p.a[0]) * sc, Math.abs(p.b[1] - p.a[1]) * sc);
-    } else if (p.kind === "pad" && p.c) {
-      const sx = (p.size ? p.size[0] : 1) * sc, sy = (p.size ? p.size[1] : 1) * sc;
-      ctx.fillRect(X(p.c[0]) - sx / 2, Y(p.c[1]) - sy / 2, sx, sy);
-    } else if (p.kind === "circle" && p.c) {
-      ctx.beginPath(); ctx.arc(X(p.c[0]), Y(p.c[1]), (p.r || 0) * sc, 0, Math.PI * 2); ctx.stroke();
-    }
-  }
-  ctx.fillStyle = themeColor("dim");
-  ctx.font = "10px monospace";
-  ctx.fillText(
-    `${(b.xmax - b.xmin).toFixed(2)} × ${(b.ymax - b.ymin).toFixed(2)} mm`,
-    8, H - 8
-  );
+  drawKicadPrims(kCanvas, preview || (lastPacked && lastPacked.preview));
 }
 
 function showPacked(d, metricsHost) {
@@ -422,7 +386,8 @@ export function init(container) {
     ),
     el("div", { class: "panel" },
       el("h2", {}, "Preview"),
-      el("div", { class: "panel-row" }, el("div", { class: "sim-cell" }, el("div", { class: "sim-label" }, "F.Cu"), kCanvas))
+      el("div", { class: "panel-row" }, el("div", { class: "sim-cell" }, el("div", { class: "sim-label" }, "KiCad copper"), kCanvas)),
+      el("div", { class: "dim" }, "red F.Cu · blue B.Cu · (green In1 / orange In2 reserved)")
     ),
     el("div", { class: "panel" },
       el("h2", {}, "Parameters"),

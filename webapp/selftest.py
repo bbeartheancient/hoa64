@@ -244,6 +244,12 @@ def selftest() -> int:
     r = client.get("/js/tabs/micromag_sim.js")
     expect("sim-flux-read" in r.text and "renderFluxTiles" in r.text,
            "micromag_sim.js missing flux-tile panel")
+    r = client.get("/js/kicad_layers.js")
+    expect(r.status_code == 200 and "#e31c23" in r.text and "In2.Cu" in r.text,
+           "kicad_layers.js palette")
+    for tab in ("antenna.js", "filter.js", "materials.js"):
+        src = client.get(f"/js/tabs/{tab}").text
+        expect("kicad_layers.js" in src, f"{tab} missing kicad_layers import")
     print("PASS GET /api/sim/flux-tiles + FLUX TILES panel")
 
     from ..micromag import _e_tile as _et
