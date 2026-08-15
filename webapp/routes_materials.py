@@ -27,6 +27,8 @@ class DesignReq(BaseModel):
     order: int = 16
     start: str = "sylvester"
     pitch_mm: float = 1.0
+    gap_frac: float | None = None  # None → per-kind default in materials.py
+    tile: int = 8
 
 
 def _build(req: DesignReq) -> dict:
@@ -44,10 +46,18 @@ def _build(req: DesignReq) -> dict:
         raise HTTPException(status_code=400, detail="order must be 4k, 4..256")
     if not (0.2 <= req.pitch_mm <= 20.0):
         raise HTTPException(status_code=400, detail="pitch_mm must be 0.2..20")
+    if req.gap_frac is not None and not (0.05 <= req.gap_frac <= 0.5):
+        raise HTTPException(status_code=400, detail="gap_frac must be 0.05..0.5")
+    if req.tile not in materials.TILES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"tile must be one of {materials.TILES}",
+        )
     try:
         return materials.design(
             req.kind, req.order, start=req.start,
             pitch_mm=req.pitch_mm, lib_dir=LIB_DIR,
+            gap_frac=req.gap_frac, tile=req.tile,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e

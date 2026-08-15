@@ -65,12 +65,16 @@ function selectLayer(name) {
 }
 
 function body() {
-  return {
+  const b = {
     kind: layer,
     order: parseInt(document.getElementById("mat-order").value, 10),
     start: document.getElementById("mat-start").value,
     pitch_mm: numVal("mat-pitch", 1.0),
+    tile: parseInt(document.getElementById("mat-tile").value, 10),
   };
+  const gap = parseFloat(document.getElementById("mat-gap").value);
+  if (Number.isFinite(gap)) b.gap_frac = gap;
+  return b;
 }
 
 function renderStats(d) {
@@ -206,6 +210,12 @@ export function init(container) {
         el("option", { value: "sylvester" }, "SYLVESTER"),
         el("option", { value: "library" }, "LIBRARY"))),
     el("div", { class: "row" }, el("label", {}, "pitch mm"), el("input", { id: "mat-pitch", type: "number", value: "1.0", step: "0.1", min: "0.2" })),
+    el("div", { class: "row" }, el("label", {}, "gap frac"), el("input", { id: "mat-gap", type: "number", step: "0.01", min: "0.05", max: "0.5", placeholder: "auto" })),
+    el("div", { class: "row" }, el("label", {}, "flux tile"),
+      el("select", { id: "mat-tile" },
+        el("option", { value: "4" }, "4×4"),
+        el("option", { value: "8", selected: "selected" }, "8×8"),
+        el("option", { value: "16" }, "16×16"))),
     el("div", { class: "btn-row" },
       el("button", { class: "btn", id: "mat-run" }, "Generate"),
       el("button", { class: "btn", id: "mat-kicad" }, "Export KiCad"))

@@ -42,6 +42,7 @@ from .micromag import flux_map, flux_tiles
 
 KINDS = ("cloth", "touchpad", "metamaterial")
 STARTS = ("sylvester", "library")
+TILES = (4, 8, 16)
 
 
 def load_H(order: int, start: str = "sylvester",
@@ -426,20 +427,29 @@ def metamaterial(H, pitch_mm: float = 2.0, gap_frac: float = 0.2) -> dict:
 
 
 def design(kind: str, order: int, start: str = "sylvester",
-           pitch_mm: float = 1.0, lib_dir=None) -> dict:
+           pitch_mm: float = 1.0, lib_dir=None,
+           gap_frac: float | None = None, tile: int = 8) -> dict:
+    """Layout dispatcher.  ``gap_frac=None`` keeps the per-kind default
+    (cloth 0.18, touch/meta 0.20); ``tile`` sizes the flux-tile catalog.
+    """
     if kind not in KINDS:
         raise ValueError(f"unknown kind {kind!r}; expected {KINDS}")
+    if tile not in TILES:
+        raise ValueError(f"unknown tile {tile!r}; expected {TILES}")
+    if gap_frac is not None and not (0.0 < float(gap_frac) < 1.0):
+        raise ValueError(f"gap_frac must be in (0, 1), got {gap_frac}")
     H = normalize(load_H(order, start, lib_dir=lib_dir))
     pitch = float(pitch_mm)
+    kw = {} if gap_frac is None else {"gap_frac": float(gap_frac)}
     if kind == "cloth":
-        out = cloth(H, pitch_mm=pitch)
+        out = cloth(H, pitch_mm=pitch, **kw)
     elif kind == "touchpad":
-        out = touchpad(H, pitch_mm=max(pitch, 1.5))
+        out = touchpad(H, pitch_mm=max(pitch, 1.5), **kw)
     else:
-        out = metamaterial(H, pitch_mm=max(pitch, 1.5))
+        out = metamaterial(H, pitch_mm=max(pitch, 1.5), **kw)
     out["order"] = int(order)
     out["start"] = start
-    out["tiles"] = flux_tiles(H)
+    out["tiles"] = flux_tiles(H, tile=tile)
     out["key"] = MAP_KEY
     return out
 
@@ -484,5 +494,26 @@ if __name__ == "__main__":
     d = design("cloth", 16, "sylvester")
     assert d["tiles"]["kronecker_h8"]
     print(f"PASS  design cloth/16: H8 agree {d['tiles']['h8_agree']:.3f}")
+
+    # gap_frac plumbs through design; None keeps the per-kind default
+    d0 = design("cloth", 16, "sylvester")
+    d1 = design("cloth", 16, "sylvester", gap_frac=0.4)
+    assert d0["stats"]["fill"] == 1.0 - 0.18
+    assert d1["stats"]["fill"] == 1.0 - 0.4
+    r0 = d0["layout"]["rects"][0]["w"], d1["layout"]["rects"][0]["w"]
+    assert r0[1] < r0[0]
+    print(f"PASS  gap_frac: cell {r0[0]:.3f} mm (default) → {r0[1]:.3f} mm (0.4)")
+
+    # tile sizes the flux-tile catalog
+    t4 = design("cloth", 16, "sylvester", tile=4)["tiles"]
+    assert t4["tile"] == 4 and t4["n_tiles"] is not None
+    assert d0["tiles"]["tile"] == 8
+    print(f"PASS  tile=4: {t4['n_tiles']} unique 4×4 tiles "
+          f"(counts {t4['counts']})")
+    try:
+        design("cloth", 16, "sylvester", tile=5)
+        raise SystemExit("tile=5 should raise")
+    except ValueError:
+        pass
 
     print("materials self-check: all checks passed")

@@ -184,6 +184,26 @@ if __name__ == "__main__":
     # wideband mmWave: no catalog parts — empty list, not an error.
     assert match({"f_lo_hz": 28e9, "f_hi_hz": 29e9}) == []
 
+    # expanded catalog: ≥ 100 rows, with loop antennas and u.fl mounts
+    assert len(parts) >= 100, f"only {len(parts)} rows"
+    assert sum(p["type"] == "loop" for p in parts) >= 2, "need ≥ 2 loop rows"
+    assert sum(p["mount"] == "u.fl" for p in parts) >= 2, "need ≥ 2 u.fl rows"
+
+    # GNSS L1 1575.42 ± 5 MHz, circular, full cover (no partial): the
+    # wideband active patches / helicals (1559–1606 MHz) must qualify.
+    gf = match({"f_lo_hz": 1570.42e6, "f_hi_hz": 1580.42e6,
+                "polarization": "circular"})
+    assert len(gf) >= 2, f"only {len(gf)} full-cover GNSS circular matches"
+    assert all(x["polarization"] in ("circular", "RHCP") for x in gf)
+    assert all(x["freq_lo_mhz"] <= 1570.42 and x["freq_hi_mhz"] >= 1580.42
+               for x in gf)
+
+    # UWB channel 5 (~6.5 GHz): at least one overlapping part.
+    u = match({"f_lo_hz": 6200e6, "f_hi_hz": 6800e6, "partial": True})
+    assert len(u) >= 1, "no UWB ch5 overlap"
+
     print(f"parts_db self-check OK: {len(parts)} rows, "
           f"{len(r)} parts cover 2400–2485 MHz @ gain ≥ 0 dBi, "
-          f"GNSS circular match: {g[0]['part']} ({g[0]['mfr']})")
+          f"GNSS circular match: {g[0]['part']} ({g[0]['mfr']}), "
+          f"GNSS full-cover circular: {len(gf)}, UWB ch5 overlap: "
+          f"{u[0]['part']} ({u[0]['mfr']})")

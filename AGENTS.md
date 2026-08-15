@@ -92,13 +92,25 @@ channel count, and FOA is a normalized H4.
   job-based /fields FDTD lab and /evolve Hadamard-seeded topology SA —
   same callback→report/`_BudgetStop`/`params["live"]` wiring as
   routes_sim), `routes_filter.py` (PCB RF-filter lab under /api/filter:
-  sync /design Butterworth/Chebyshev LPF/HPF/BPF/BSF + S21/S11 sweep +
-  /kicad footprint/board, job-based /evolve Hadamard SA on section
-  lengths/widths; lumped LC/RC/CRC export from the same g-values is
-  planned, not shipped), `routes_materials.py` (cloth/touchpad/
+  sync /design Butterworth/Chebyshev LPF/HPF/BPF/BSF with a `topo`
+  selector — distributed stepped-Z/gap+stub/hairpin/open-stub plus
+  lumped `lc` (LPF/HPF/BPF/BSF), `dc_lc` and `c_shunt` coupled-resonator
+  BPF, `qw_tl` Richards/Kuroda commensurate lines, and passive
+  `rc`/`crc`/`rl` — + S21/S11 sweep + BOM (`components[]`) +
+  /kicad footprint/board, and KiCad ≥8 design blocks
+  (`.kicad_block` folder = block.kicad_sch + block.json + block.kicad_pcb
+  + zip) for lumped topos; lumped topos allow f down to 1 Hz;
+  job-based /evolve Hadamard SA on section
+  lengths/widths, distributed topos only), `routes_materials.py`
+  (cloth/touchpad/
   metamaterial from H.8 flux tiles + /kicad), `routes_noise.py` (/api/noise: /classes model status,
   /train DiT job, /analyze WAV-path or live-mic classify → mel PNG +
-  probs), `static/vendor/`
+  probs), `routes_mcu.py` (/api/mcu Microcontroller lab: /firmware LED
+  matrix (ESP32/Teensy Arduino + CircuitPython) and ESP-NOW mesh node
+  sketches via one-shot token downloads, /push GRB frame → device HTTP
+  POST (bare-host validated, trusted-local), /mesh/collect gateway RSSI
+  matrix fetch, /export edge engine bundles),
+  `static/vendor/`
   (pinned three.js 0.170.0 + OrbitControls, import map in index.html),
   `static/js/kicad_layers.js` (fixed copper palette for all KiCad
   previews — red F.Cu, blue B.Cu, green In1.Cu, orange In2.Cu;
@@ -179,13 +191,14 @@ channel count, and FOA is a normalized H4.
   Search Studio, Micromag Sim, HOA Studio, Terrain, Orbitals, Library,
   Materials (`js/tabs/materials.js` — `#mat-layer-select` CLOTH/TOUCH/META:
   two-layer yarn, mutual-cap electrodes, spin-ice unit cell + Walsh
-  lattice from `materials.py`; KiCad export via design_type=materials),
+  lattice from `materials.py`; gap_frac and flux-tile size (4/8/16) are
+  exposed in the Source panel; KiCad export via design_type=materials),
   Filter (`js/tabs/filter.js` — `#flt-layer-select` DESIGN/EVOLVE/KICAD:
-  stepped-Z LPF, gap+stub HPF, hairpin BPF, open-stub BSF; S21/S11
-  canvas; KiCad preview + one-shot download; SA streams IL/RL/rejection;
-  current output is distributed microstrip — lumped LC/RC/CRC ladders
-  from the same prototype are a planned extra export, not a UI layer
-  yet),
+  per-kind TOPOLOGY select (stepped-Z LPF, gap+stub HPF, hairpin BPF,
+  open-stub BSF + lumped lc/dc_lc/c_shunt/qw_tl/rc/crc/rl); S21/S11
+  canvas; BOM table with engineering values for lumped topos; KiCad
+  preview + one-shot download incl. `.kicad_block` design-block zip for
+  lumped; SA streams IL/RL/rejection and is gated to distributed topos),
   Antenna (`js/tabs/antenna.js` — `#ant-layer-select` DESIGN/PARTS/
   FIELDS/EVOLVE/KICAD/SMITH panels; FIELDS/EVOLVE stream job frames over
   `/ws/job/{id}`, DESIGN auto-fires the parts query and exposes one-shot
@@ -205,7 +218,15 @@ channel count, and FOA is a normalized H4.
   stat rows + [RESULT JSON] blob download; viz canvases capped via
   `.ant-cap` in app.css), Noise (`js/tabs/noise.js` — DiT classifier
   training with a loss/acc strip chart + WAV/live-mic analysis with mel
-  spectrogram and class-probability bars) —
+  spectrogram and class-probability bars), Microcontroller
+  (`js/tabs/microcontroller.js` — `#mcu-layer-select` LED/MESH/EDGE:
+  LED paints WS2812 frames (serpentine GRB) and downloads
+  ESP32/Teensy/CircuitPython firmware or pushes frames to a device IP;
+  MESH (ALPHA — RSSI tomography, no CSI) downloads ESP-NOW node sketches,
+  collects the gateway RSSI matrix, draws link-strength/delta-vs-baseline
+  viz, exports `mesh_field.json` for the external spatialxr project;
+  EDGE downloads hadamard_core/flux_map/terrain_fbm kernels as
+  CircuitPython/Rust no_std/bare-metal C from `mcu.py`) —
   cross-tab deep links via `hoa64:open-tab`/`hoa64:payload` events in
   `main.js`; `js/viz/stripchart.js`. Single-viewport UI convention: each
   tab keeps ONE main viewport and swaps content in place — Matrix Lab's
@@ -261,7 +282,7 @@ channel count, and FOA is a normalized H4.
   budget at f_lo, medium attenuation e^(−αλ), polarization mismatch,
   viability constraints; composite = product, `explain()` trace),
   `parts_db.py` + `webapp/data/antenna_parts.json` (local curated
-  off-the-shelf antenna DB, 57 rows — everythingRF has no API and
+  off-the-shelf antenna DB, 103 rows — everythingRF has no API and
   403-blocks scraping, so rows mirror their listing fields and carry
   `erf_url` deep links; dual-band parts are one row per lobe;
   `match(spec)` freq-coverage gate + gain/size scoring; `/api/antenna/parts`
@@ -286,17 +307,26 @@ channel count, and FOA is a normalized H4.
   prims (`layer` prefers a real *.Cu token; `fill` is captured so
   silk/Edge.Cuts stay `none`); Wheeler/Hammerstad 50 Ω feedline, 6h ground, keep-out under
   the radiator; also `footprint_filter` / `design_type="filter"` for
-  stepped/hairpin/stub RF filters from `rf_filter.layout_mm`; S-expr
+  stepped/hairpin/stub RF filters from `rf_filter.layout_mm` plus
+  `schematic_lumped`/`design_block_lumped` — KiCad ≥8 `.kicad_block`
+  folders (embedded-lib_symbols `.kicad_sch` + block.json + board + zip)
+  for lumped filter topos; S-expr
   parser validity gate + `kicad-cli pcb upgrade` check when available),
   `materials.py` (cloth/touchpad/metamaterial layouts from
   `flux_tiles`; open-sheet 4-connected electrodes, wall-bond
-  capacitors, H.8 spin-ice unit cell + Walsh lattice),
+  capacitors, H.8 spin-ice unit cell + Walsh lattice; `design` takes
+  `gap_frac` and `tile` (4/8/16) options),
   `rf_filter.py` (PCB RF-filter physics: Butterworth/Chebyshev g-values,
   Wheeler microstrip, ABCD cascade S-params with tanδ+Rs loss, Marki
   IL≈4.343 Σg/(Δ Q_u), everythingRF digest targets RL≥10 dB and
   40 dBc @ 10 % from the edge; `filter_sa` Hadamard-seeded section
-  perturbation; ships distributed microstrip layout — lumped LC / RC /
-  CRC-π realisations of the same *g*-vector are the next output form),
+  perturbation (distributed topos only); `design_filter(..., topo=...)`
+  dispatches per-kind `TOPOS` — distributed stepped/stub/hairpin plus
+  lumped `lc` ladders (Pozar 8.3/8.4), `dc_lc` nodal C-coupled and
+  `c_shunt` combline-style BPF, `qw_tl` Richards/Kuroda commensurate
+  lines, passive `rc`/`crc`/`rl` staged ladders (approximate in a 50 Ω
+  environment — corner shifts documented in the docstrings); lumped
+  designs carry a `components[]` BOM and lay out as 0805 pad cascades),
   `site_survey.py` (virtual site survey: AWS Open Data SRTM Terrarium
   tiles [no key, cached to ~/.cache/hoa64/terrain], tight DEM window +
   Esri World Imagery JPEG mosaic [Pillow; cached as PNG under
@@ -313,6 +343,17 @@ channel count, and FOA is a normalized H4.
   window-level train/val split over 15 long recordings means val_acc≈1
   reflects within-recording familiarity — needs a larger database and
   unseen-source testing before generalization claims).
+- Microcontroller-lab module (ALPHA — firmware is template-generated and
+  hardware-tested only by the user): `mcu.py` — WS2812 GRB frame packing
+  (`pack_frame`/`pack_frames`, serpentine remap), `led_firmware`
+  (ESP32/Teensy Arduino FastLED + CircuitPython sketches with an HTTP
+  `POST /frame` raw-GRB contract), `mesh_firmware` (ESP-NOW RSSI
+  tomography nodes, gateway serves `GET /mesh`), and `export_engine`
+  (hadamard_core / flux_map / terrain_fbm → CircuitPython / Rust
+  `#![no_std]` / bare-metal C). Each kernel exists first as a plain
+  Python reference (`py_*`) pinned against `hadamard.py`/`micromag.py`
+  in the module selftest; the C/Rust/CircuitPython bodies are templates
+  of the same algorithms.
 - Search engines/daemons (standalone scripts, each does
   `sys.path.insert(0, parent)` then `from hoa64....` imports):
   `evolve.py` (gap-filling daemon, constructions only), `search_daemon.py`
