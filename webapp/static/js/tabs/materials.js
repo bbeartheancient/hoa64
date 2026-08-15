@@ -123,6 +123,7 @@ function renderKey(key) {
   };
   block("FILL — flux tile P = 2W−1", key.fill);
   block("COPPER — 2-layer stack", key.copper);
+  if (key.feeds && key.feeds.length) block("MARKS — electrode feeds", key.feeds);
   host.replaceChildren(...kids);
 }
 
@@ -162,6 +163,19 @@ function drawPreview() {
     if (p.kind === "rect" && p.a && p.b) {
       ctx.fillRect(X(Math.min(p.a[0], p.b[0])), Y(Math.max(p.a[1], p.b[1])),
         Math.abs(p.b[0] - p.a[0]) * sc, Math.abs(p.b[1] - p.a[1]) * sc);
+    } else if (p.kind === "pad" && p.c && p.role === "feed") {
+      const r = Math.max(2.5, Math.min(p.size ? p.size[0] : 0.3, p.size ? p.size[1] : 0.3) * sc * 0.5);
+      ctx.beginPath();
+      ctx.arc(X(p.c[0]), Y(p.c[1]), r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = themeColor("bg");
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      if (p.name) {
+        ctx.fillStyle = themeColor("fg");
+        ctx.font = "9px monospace";
+        ctx.fillText(p.name, X(p.c[0]) + r + 2, Y(p.c[1]) + 3);
+      }
     } else if (p.kind === "pad" && p.c) {
       const sx = (p.size ? p.size[0] : 1) * sc, sy = (p.size ? p.size[1] : 1) * sc;
       ctx.fillRect(X(p.c[0]) - sx / 2, Y(p.c[1]) - sy / 2, sx, sy);

@@ -104,6 +104,10 @@ MAP_KEY = {
         {"layer": "B.Cu", "h": -1, "name": "reverse",
          "means": "H=−1 bottom / reverse yarn"},
     ],
+    "feeds": [
+        {"name": "○ F# / B#", "swatch": "fg",
+         "means": "electrode feed — snapped to a cell of that net, not extra copper"},
+    ],
 }
 
 
@@ -174,6 +178,8 @@ def preview_from_layout(layout: dict) -> dict:
             "kind": "pad", "name": p.get("name", ""),
             "c": [p["x"], p["y"]], "size": [p["w"], p["h"]],
             "layer": p.get("layer", "F.Cu"),
+            "polarity": p.get("polarity"),
+            "role": p.get("role", "pad"),
         })
     for v in layout.get("vias") or []:
         prims.append({
@@ -252,7 +258,8 @@ def cloth(H, pitch_mm: float = 1.0, gap_frac: float = 0.18) -> dict:
             i = int(hits[0, 0])
             pads.append({"name": name, "x": origin - pitch,
                          "y": origin + (n - 1 - i) * pitch,
-                         "w": cell, "h": cell, "layer": layer})
+                         "w": cell, "h": cell, "layer": layer,
+                         "role": "feed", "polarity": 1 if name == "F" else -1})
     layout = {"rects": rects, "pads": pads, "vias": [],
               "bbox": _bbox_of(rects, pads), "kind": "cloth"}
     stats = {
@@ -307,18 +314,25 @@ def touchpad(H, pitch_mm: float = 2.0, gap_frac: float = 0.2) -> dict:
             caps.append({"face": a, "reverse": b, "dir": "v",
                          "w": [float(W[i, j]), float(W[i + 1, j])]})
     pads = []
-    for lab, n_el, prefix, layer in (
-        (face_lab, n_face, "F", "F.Cu"),
-        (rev_lab, n_rev, "B", "B.Cu"),
+    for lab, n_el, prefix, layer, hsign in (
+        (face_lab, n_face, "F", "F.Cu", 1),
+        (rev_lab, n_rev, "B", "B.Cu", -1),
     ):
         for eid in range(n_el):
             cells = np.argwhere(lab == eid)
+            # snap to a real cell — the geometric centroid of an L-shaped
+            # electrode can sit *between* cells and reads as a stray point
             cy, cx = cells.mean(axis=0)
+            k = int(np.argmin((cells[:, 0] - cy) ** 2 + (cells[:, 1] - cx) ** 2))
+            i, j = int(cells[k, 0]), int(cells[k, 1])
             pads.append({
                 "name": f"{prefix}{eid}",
-                "x": origin + float(cx) * pitch,
-                "y": origin + (n - 1 - float(cy)) * pitch,
-                "w": cell * 0.55, "h": cell * 0.55, "layer": layer,
+                "x": origin + j * pitch,
+                "y": origin + (n - 1 - i) * pitch,
+                "w": cell * 0.28, "h": cell * 0.28,
+                "layer": layer,
+                "polarity": int(P[i, j]),
+                "role": "feed",
             })
     layout = {"rects": rects, "pads": pads, "vias": [],
               "bbox": _bbox_of(rects, pads), "kind": "touchpad"}
@@ -447,8 +461,13 @@ if __name__ == "__main__":
     t = touchpad(H8, pitch_mm=2.0)
     assert t["stats"]["n_caps"] > 0
     assert t["stats"]["n_electrodes"] == t["stats"]["n_face"] + t["stats"]["n_reverse"]
+    feeds = [p for p in t["layout"]["pads"] if p.get("role") == "feed"]
+    assert len(feeds) == t["stats"]["n_electrodes"]
+    cell_xy = {(round(r["x"], 6), round(r["y"], 6)) for r in t["layout"]["rects"]}
+    for p in feeds:
+        assert (round(p["x"], 6), round(p["y"], 6)) in cell_xy, p
     print(f"PASS  touchpad H8: {t['stats']['n_electrodes']} 2-layer electrodes, "
-          f"{t['stats']['n_caps']} caps")
+          f"{t['stats']['n_caps']} caps, {len(feeds)} snapped feeds")
 
     m = metamaterial(sylvester(16), pitch_mm=2.0)
     assert m["stats"]["n_atoms"] == 4
