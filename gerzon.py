@@ -187,10 +187,14 @@ def _flip_tile(H, i, j) -> None:
     H[i + 1, j + 1] *= -1
 
 
-def _flip_cancel_pair(H, i, j) -> None:
+def flip_cancel_pair(H, i, j) -> None:
     """Flip the 45°/225° pair (L_F, R_B) — the antipodes that cancel in X,Y."""
     H[i, j] *= -1          # Lf
     H[i + 1, j + 1] *= -1  # Rb
+
+
+# Kept as an alias so older call sites / self-check stay valid.
+_flip_cancel_pair = flip_cancel_pair
 
 
 def gerzon_sa(order, T_start=20.0, T_end=0.01, cooling=0.9995,

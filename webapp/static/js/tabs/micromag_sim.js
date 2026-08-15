@@ -3,11 +3,11 @@
 //   {step,T,E,best_E,accepts,E_exch,E_dem,E_anis,elapsed_s}  (every 500 steps)
 //   (+ E_goal / goal_agree when a library goal target is active)
 //   {matrix_png_b64}  throttled ±1 preview
-//   {field_png_b64, grad_png_b64, flux_png_b64}  site-energy / |dF| / wall-density
+//   {field_png_b64, grad_png_b64, flux_png_b64, z_png_b64}  energy / |dF| / walls / |Z|
 //   {"type":"end"}  terminal
-// Live retune: {"op":"set",cooling,lam_ex,lam_ani,lam_goal,lam_tile} → job.params["live"].
+// Live retune: {"op":"set",cooling,lam_ex,lam_ani,lam_goal,lam_tile,lam_z} → job.params["live"].
 // Unified visualizers (Item 4): ONE matrix canvas + ONE field canvas with a
-// [MATRIX][ENERGY][GRAD][FLUX] layer selector. Each WS PNG is cached
+// [MATRIX][ENERGY][GRAD][FLUX][GERZON] layer selector. Each WS PNG is cached
 // pristine (server-green) per layer; the visible field canvas composites the
 // selected layer and is retinted (theme LUT lives only there). The FLUX
 // layer keeps its animated FLUX_FRAG flow underlay — paused and hidden when
@@ -26,16 +26,18 @@ let ws = null;
 let currentJob = null;
 let fxCanvas, fxShader, fluxShader, fluxShaderCanvas, fxRaf = null; // bg layers
 let firstE = null, latestE = null, lastFluxTiles = null, fluxInfoEl;
-let layer = "energy"; // active field layer: matrix | energy | grad | flux
+let lastGerzon = null, gerzonInfoEl;
+let layer = "energy"; // active field layer: matrix | energy | grad | flux | gerzon
 const layerCache = {}; // name → {canvas, ctx, has} pristine PNG per layer
 let layerBtns = {};
 
-const LAYER_LABELS = { matrix: "MATRIX", energy: "ENERGY", grad: "GRAD", flux: "FLUX" };
+const LAYER_LABELS = { matrix: "MATRIX", energy: "ENERGY", grad: "GRAD", flux: "FLUX", gerzon: "GERZON" };
 const LAYER_TITLES = {
   matrix: "matrix (best)",
   energy: "site energy",
   grad: "|dF| gradient",
   flux: "flux (walls)",
+  gerzon: "Gerzon |Z| walls",
 };
 
 function el(tag, attrs = {}, ...kids) {
@@ -155,6 +157,28 @@ function renderFluxTiles(ft) {
   fluxInfoEl.replaceChildren(...(rows.length ? rows : [statRow("flux tiles", "—")]));
 }
 
+function renderGerzon(gz) {
+  if (!gerzonInfoEl) return;
+  if (!gz) {
+    gerzonInfoEl.replaceChildren(statRow("gerzon", "start a run, or [READ GERZON]"));
+    return;
+  }
+  const a = gz.aligned || {};
+  const o = gz.overlap || {};
+  const rows = [];
+  if (a.n_cells != null)
+    rows.push(statRow("aligned H₂", `${a.n_h2}/${a.n_cells}`,
+      a.n_h2 === a.n_cells ? "good" : ""));
+  if (a.n_wall != null) rows.push(statRow("aligned walls", a.n_wall));
+  if (a.n_cohesive != null) rows.push(statRow("aligned cohesive", a.n_cohesive));
+  if (o.n_wall != null)
+    rows.push(statRow("overlap walls", `${o.n_wall}/${o.n_cells}`));
+  if (gz.E_z != null)
+    rows.push(statRow("E_z", Number(gz.E_z).toPrecision(4),
+      Number(gz.E_z) === 0 ? "good" : ""));
+  gerzonInfoEl.replaceChildren(...(rows.length ? rows : [statRow("gerzon", "—")]));
+}
+
 function resetRun() {
   waveChart.clear();
   statsEl.replaceChildren();
@@ -163,7 +187,9 @@ function resetRun() {
   firstE = null;
   latestE = null;
   lastFluxTiles = null;
+  lastGerzon = null;
   renderFluxTiles(null);
+  renderGerzon(null);
   for (const c of Object.values(layerCache)) c.has = false; // stale layers drop
   showLayer();
 }
@@ -288,6 +314,11 @@ function handleFrame(d) {
     if (d.field_png_b64) cacheDraw("energy", d.field_png_b64);
     if (d.grad_png_b64) cacheDraw("grad", d.grad_png_b64);
     if (d.flux_png_b64) cacheDraw("flux", d.flux_png_b64);
+    if (d.z_png_b64) cacheDraw("gerzon", d.z_png_b64);
+    if (d.gerzon) {
+      lastGerzon = d.gerzon;
+      renderGerzon(lastGerzon);
+    }
     if (d.flux_tiles) {
       lastFluxTiles = d.flux_tiles;
       renderFluxTiles(lastFluxTiles);
@@ -302,6 +333,7 @@ function handleFrame(d) {
         E_anis: d.E_anis,
         E_goal: d.E_goal,
         E_tile: d.E_tile,
+        E_z: d.E_z,
         T: d.T,
       });
     }
@@ -329,6 +361,8 @@ function handleFrame(d) {
         if (typeof lastFluxTiles.h8_agree === "number")
           bits.push(`H8 ${(lastFluxTiles.h8_agree * 100).toFixed(0)}%`);
       }
+      if (typeof d.n_h2 === "number")
+        bits.push(`H₂ ${d.n_h2}${typeof d.n_wall === "number" ? ` wall ${d.n_wall}` : ""}`);
       statusEl.textContent = bits.join(" · ");
     }
     return;
@@ -370,6 +404,19 @@ async function finishRun() {
           rows.push(statRow("H.8 tile agree", `${(ft.h8_agree * 100).toFixed(1)}%`,
             ft.kronecker_h8 ? "good" : ""));
       }
+      const gz = r.gerzon || lastGerzon;
+      if (gz) {
+        lastGerzon = gz;
+        renderGerzon(gz);
+        const a = gz.aligned || {};
+        if (a.n_cells != null)
+          rows.push(statRow("gerzon H₂", `${a.n_h2}/${a.n_cells}`,
+            a.n_h2 === a.n_cells ? "good" : ""));
+        if (a.n_wall != null) rows.push(statRow("gerzon walls", a.n_wall));
+        if (gz.E_z != null)
+          rows.push(statRow("E_z", Number(gz.E_z).toPrecision(4),
+            Number(gz.E_z) === 0 ? "good" : ""));
+      }
       statsEl.replaceChildren(...rows);
       exportBtn.style.display = "";
       exportBtn.disabled = false;
@@ -377,6 +424,7 @@ async function finishRun() {
       msg(`no Hadamard found (best_E=${r.best_E ?? "?"})`, "error");
       statsEl.replaceChildren(statRow("ok", false, "bad"), statRow("best_E", r.best_E ?? "?"));
       if (lastFluxTiles) renderFluxTiles(lastFluxTiles);
+      if (lastGerzon) renderGerzon(lastGerzon);
     }
   } catch (e) {
     msg(`result fetch failed: ${e.message}`, "error");
@@ -413,6 +461,31 @@ async function doReadTiles() {
   }
 }
 
+async function doReadGerzon() {
+  const order = parseInt(document.getElementById("sim-order").value, 10);
+  let start = document.getElementById("sim-start").value;
+  if (start === "random") start = "sylvester";
+  msg("reading Gerzon Z-wall…");
+  try {
+    const d = await api(`/api/sim/gerzon?order=${order}&start=${start}`);
+    lastGerzon = d;
+    renderGerzon(lastGerzon);
+    if (d.z_png_b64) {
+      cacheDraw("gerzon", d.z_png_b64);
+      selectLayer("gerzon");
+    }
+    const a = d.aligned || {};
+    msg(
+      a.n_cells != null
+        ? `Gerzon: H₂ ${a.n_h2}/${a.n_cells} · wall ${a.n_wall} · E_z ${Number(d.E_z).toPrecision(3)}`
+        : "Gerzon: no cells",
+      "ok"
+    );
+  } catch (e) {
+    msg(`Gerzon read failed: ${e.message}`, "error");
+  }
+}
+
 async function doStart() {
   const seedRaw = document.getElementById("sim-seed").value;
   const body = {
@@ -439,6 +512,7 @@ async function doStart() {
     body.lam_goal = numVal("sim-lam-goal", 0.5);
   }
   body.lam_tile = numVal("sim-lam-tile", 0);
+  body.lam_z = numVal("sim-lam-z", 0);
 
   if (ws) ws.close();
   resetRun();
@@ -485,6 +559,7 @@ function sendTune() {
     lam_ani: parseFloat(document.getElementById("tune-lam-ani").value),
     lam_goal: parseFloat(document.getElementById("tune-lam-goal").value),
     lam_tile: parseFloat(document.getElementById("tune-lam-tile").value),
+    lam_z: parseFloat(document.getElementById("tune-lam-z").value),
   });
 }
 
@@ -542,11 +617,13 @@ export function init(container) {
     ),
     el("div", { class: "row" }, el("label", {}, "lam_goal"), el("input", { id: "sim-lam-goal", type: "number", value: "0.5", step: "0.1", min: "0" })),
     el("div", { class: "row" }, el("label", {}, "lam_tile"), el("input", { id: "sim-lam-tile", type: "number", value: "0", step: "0.1", min: "0" })),
+    el("div", { class: "row" }, el("label", {}, "lam_z"), el("input", { id: "sim-lam-z", type: "number", value: "0", step: "0.1", min: "0" })),
     el(
       "div",
       { class: "btn-row" },
       el("button", { class: "btn", id: "sim-launch" }, "Start simulation"),
       el("button", { class: "btn", id: "sim-flux-read" }, "Read flux tiles"),
+      el("button", { class: "btn", id: "sim-gerzon-read" }, "Read Gerzon"),
       (cancelBtn = el("button", { class: "btn", disabled: true }, "Cancel")),
       (exportBtn = el("button", { class: "btn", style: "display:none" }, "Export to library"))
     ),
@@ -561,7 +638,8 @@ export function init(container) {
     slider("tune-lam-ex", "lam_ex", "0", "1", "0.01", "0"),
     slider("tune-lam-ani", "lam_ani", "0", "1", "0.01", "0"),
     slider("tune-lam-goal", "lam_goal", "0", "5", "0.05", "0.5"),
-    slider("tune-lam-tile", "lam_tile", "0", "5", "0.05", "0")
+    slider("tune-lam-tile", "lam_tile", "0", "5", "0.05", "0"),
+    slider("tune-lam-z", "lam_z", "0", "5", "0.05", "0")
   );
 
   const statusPanel = el(
@@ -573,12 +651,12 @@ export function init(container) {
   );
 
   // unified waveforms (Item 2): ONE strip chart for E / E_dem / E_exch /
-  // E_anis / E_goal / T with a multi-select bracket toggle per series
-  // (default E + T on). E_EXCH/E_ANIS stay selectable even at λ=0 — the
-  // series carries whatever the frames report; E_GOAL is a flat 0 line
-  // unless a library goal target is active. Series colors come from the
-  // active themeRamp (colors=null), keeping mono themes single-hue.
-  const WAVE_SERIES = ["E", "E_dem", "E_exch", "E_anis", "E_goal", "E_tile", "T"];
+  // E_anis / E_goal / E_tile / E_z / T with a multi-select bracket toggle
+  // per series (default E + T on). E_EXCH/E_ANIS stay selectable even at
+  // λ=0 — the series carries whatever the frames report; E_GOAL / E_Z
+  // are flat 0 unless a library goal or Gerzon prior is active. Series
+  // colors come from the active themeRamp (colors=null).
+  const WAVE_SERIES = ["E", "E_dem", "E_exch", "E_anis", "E_goal", "E_tile", "E_z", "T"];
   const WAVE_DEFAULT_ON = new Set(["E", "T"]);
   const waveCanvas = el("canvas", { class: "chart", width: "520", height: "170" });
   waveChart = makeStripChart(waveCanvas, null);
@@ -609,8 +687,8 @@ export function init(container) {
   );
 
   // unified visualizers (Item 4): matrix canvas + ONE field canvas whose
-  // layer is chosen by the [MATRIX][ENERGY][GRAD][FLUX] selector; each WS
-  // PNG is cached pristine per layer and composited on select
+  // layer is chosen by the [MATRIX][ENERGY][GRAD][FLUX][GERZON] selector;
+  // each WS PNG is cached pristine per layer and composited on select
   for (const name of Object.keys(LAYER_LABELS)) {
     const c = el("canvas", { width: "256", height: "256" });
     layerCache[name] = { canvas: c, ctx: c.getContext("2d"), has: false };
@@ -647,7 +725,10 @@ export function init(container) {
     el("div", { class: "panel-row" }, matrix.node, fieldCell),
     el("h2", {}, "Flux tiles (H.8 catalog)"),
     el("table", { class: "stats" }, (fluxInfoEl = el("tbody", {},
-      el("tr", {}, el("td", { class: "dim" }, "idle — [READ FLUX TILES] or start a run")))))
+      el("tr", {}, el("td", { class: "dim" }, "idle — [READ FLUX TILES] or start a run"))))),
+    el("h2", {}, "Gerzon AB (Z-wall)"),
+    el("table", { class: "stats" }, (gerzonInfoEl = el("tbody", {},
+      el("tr", {}, el("td", { class: "dim" }, "idle — [READ GERZON] or start a run")))))
   );
   initFx(fieldCell);
   for (const [k, b] of Object.entries(layerBtns)) b.style.opacity = k === layer ? "1" : "0.45";
@@ -663,6 +744,7 @@ export function init(container) {
 
   document.getElementById("sim-launch").addEventListener("click", doStart);
   document.getElementById("sim-flux-read").addEventListener("click", doReadTiles);
+  document.getElementById("sim-gerzon-read").addEventListener("click", doReadGerzon);
   cancelBtn.addEventListener("click", doCancel);
   exportBtn.addEventListener("click", doExport);
 

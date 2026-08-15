@@ -174,7 +174,8 @@ def selftest() -> int:
     # sylvester start makes convergence deterministic (random 8 is ~20%)
     r = client.post(
         "/api/sim/micromag",
-        json={"order": 8, "budget_s": 2, "field_every_steps": 500, "start": "sylvester"},
+        json={"order": 8, "budget_s": 2, "field_every_steps": 500,
+              "start": "sylvester", "lam_z": 1.0},
     )
     expect(r.status_code == 200 and "job_id" in r.json(), "POST /api/sim/micromag")
     jid = r.json()["job_id"]
@@ -201,6 +202,19 @@ def selftest() -> int:
     expect(
         base64.b64decode(flux_frames[0]["flux_png_b64"])[:8] == PNG_MAGIC,
         "flux_png_b64 bad magic",
+    )
+    z_frames = [m for m in job.history if "z_png_b64" in m]
+    expect(len(z_frames) >= 1, "sim emitted no z_png_b64 frame")
+    expect(
+        base64.b64decode(z_frames[0]["z_png_b64"])[:8] == PNG_MAGIC,
+        "z_png_b64 bad magic",
+    )
+    expect(z_frames[0].get("gerzon", {}).get("aligned", {}).get("n_h2") is not None,
+           "sim field frame missing gerzon aligned H₂")
+    expect(
+        any("E_z" in m and "n_h2" in m
+            for m in job.history if m["type"] == "progress"),
+        "sim progress frames missing E_z / n_h2 under lam_z",
     )
     print(f"PASS sim micromag(8, sylvester) — {len(field_frames)} field frames")
 
@@ -265,6 +279,34 @@ def selftest() -> int:
     expect(_et(H8, 1.0) == 0.0, "E_tile(H8) != 0")
     expect(_et(_syl(16), 1.0) < 0.2, "E_tile(H16) too large")
     print(f"PASS E_tile prior (H8=0, H16={_et(_syl(16), 1.0):.3f})")
+
+    from ..micromag import _e_z as _ez, micromag_sa as _msa_z
+    expect(_ez(H8, 1.0) == 0.0, "E_z(H8) != 0 (Sylvester stride-2 is all H₂)")
+    expect(_ez(_syl(16), 1.0) == 0.0, "E_z(H16) != 0")
+    expect(_ez(H8, 0.0) == 0.0, "E_z(H8, lam_z=0) != 0")
+    Hr8 = rng.choice([-1, 1], size=(8, 8)).astype(np.int8)
+    expect(_ez(Hr8, 1.0) > 0.0, "E_z(random 8) unexpectedly 0")
+    Hz, infoz = _msa_z(
+        4, max_steps=2500, lam_z=1.0, rng=np.random.default_rng(3),
+    )
+    expect("E_z" in infoz and "n_h2" in infoz, "micromag_sa lam_z info missing E_z/n_h2")
+    expect(infoz["n_h2"] + infoz["n_wall"] <= 4, "micromag_sa lam_z cell counts overflow")
+    print(f"PASS E_z prior (H8=0, random={_ez(Hr8, 1.0):.3f}, "
+          f"sa4 n_h2={infoz['n_h2']} E_z={infoz['E_z']:.3f})")
+
+    r = client.get("/api/sim/gerzon?order=16&start=sylvester")
+    expect(r.status_code == 200, f"GET /api/sim/gerzon: {r.status_code}")
+    gz = r.json()
+    expect(gz.get("E_z") == 0.0, f"GET gerzon E_z {gz.get('E_z')} != 0")
+    expect(gz.get("aligned", {}).get("n_h2") == gz.get("aligned", {}).get("n_cells"),
+           f"GET gerzon aligned not all H₂: {gz.get('aligned')}")
+    expect(base64.b64decode(gz["z_png_b64"])[:8] == PNG_MAGIC, "GET gerzon z_png bad magic")
+    r = client.get("/js/tabs/micromag_sim.js")
+    expect("sim-gerzon-read" in r.text and "renderGerzon" in r.text
+           and "lam_z" in r.text and '"E_z"' in r.text
+           and "gerzon" in r.text,
+           "micromag_sim.js missing Gerzon panel / lam_z / E_z")
+    print("PASS GET /api/sim/gerzon + GERZON panel")
 
     # ------------------------------------- Item 2: micromag goal attraction
     from ..hadamard import verify as _verify
@@ -1210,6 +1252,7 @@ def selftest() -> int:
         ("POST", "/api/search", {"engine": "maxdet", "order": 8, "budget_s": 2}),
         ("POST", "/api/sim/micromag", {"order": 8, "budget_s": 2, "start": "sylvester"}),
         ("GET", "/api/sim/flux-tiles?order=16&start=sylvester", None),
+        ("GET", "/api/sim/gerzon?order=16&start=sylvester", None),
         ("POST", "/api/materials/design", {"kind": "cloth", "order": 8, "start": "sylvester"}),
         ("POST", "/api/materials/kicad", {"kind": "cloth", "order": 8, "start": "sylvester"}),
         ("POST", "/api/hoa/speakers", {"preset": "ring8", "order": 3}),

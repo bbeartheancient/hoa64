@@ -221,6 +221,18 @@ def _e_goal(corr, n, lam_goal):
     return lam_goal * (n * n - corr) / 2.0
 
 
+def _e_z(H, lam_z: float) -> float:
+    """Gerzon H₂ prior: lam_z · mean((|Z_int| − 2)²) on stride-2 tiles.
+
+    Zero on a perfect Sylvester tessellation (every aligned 2×2 is H₂)
+    and when lam_z = 0.  See ``gerzon.z_energy``.
+    """
+    if lam_z <= 0.0:
+        return 0.0
+    from .gerzon import z_energy
+    return float(lam_z) * z_energy(H, stride=2)
+
+
 def _e_tile(H, lam_tile: float) -> float:
     """Flux-tessellation prior: lam_tile · (1 − h8_agree).
 
@@ -262,7 +274,7 @@ def _swap_pair(H, rng):
 
 def micromag_sa(order, T_start=10.0, T_end=0.01, cooling=0.999, max_steps=50000,
                 lam_ex=0.0, lam_ani=0.0, n_swap=3, rng=None, start=None,
-                goal=None, lam_goal=0.5, lam_tile=0.0,
+                goal=None, lam_goal=0.5, lam_tile=0.0, lam_z=0.0,
                 callback=None, stop_flag=None, live_params=None):
     """Simulated annealing micromag search with swap moves.
 
@@ -292,18 +304,27 @@ def micromag_sa(order, T_start=10.0, T_end=0.01, cooling=0.999, max_steps=50000,
     Default 0 — the landscape is unchanged.  Weak coupling only: a
     large lam_tile freezes the Kronecker wallpaper and stops exploration.
 
+    Gerzon AB prior: when `lam_z` > 0 an extra term
+
+        E_z = lam_z · mean((|Z_int| − 2)²)
+
+    (stride-2 tiles, see ``gerzon.z_energy``) rewards H₂ cells in
+    Gerzon's WXYZ basis.  A fraction of proposals then flip the
+    45°/225° (L_F, R_B) pair instead of a polarity swap.  Default 0.
+
     Optional streaming hooks (zero behavior change when omitted):
     - callback(dict): called every 500 steps with
       {"step", "T", "E", "best_E", "accepts", "H"} — H is the current
       best ±1 matrix (for live previews; never serialized).  When a goal
       is active the dict also carries "E_goal" (current goal term) and
-      "goal_agree" (fraction of entries matching ±goal).
+      "goal_agree" (fraction of entries matching ±goal).  ``E_z`` /
+      ``n_h2`` / ``n_wall`` ride along when lam_z > 0.
     - stop_flag (threading.Event): checked every 500 steps; break early
       when set, returning the current best.
     - live_params (dict): mid-run retuning — every 500 steps the keys
-      "cooling" / "lam_ex" / "lam_ani" / "lam_goal" / "lam_tile" are
-      read and applied when present and not None (a WebSocket peer can
-      mutate the dict while SA runs).
+      "cooling" / "lam_ex" / "lam_ani" / "lam_goal" / "lam_tile" /
+      "lam_z" are read and applied when present and not None (a
+      WebSocket peer can mutate the dict while SA runs).
     """
     rng = rng or np.random.default_rng()
     if start is None:
@@ -324,8 +345,9 @@ def micromag_sa(order, T_start=10.0, T_end=0.01, cooling=0.999, max_steps=50000,
     corr_cur = int((H.astype(np.int64) * G.astype(np.int64)).sum()) \
         if G is not None else 0
     tile_cur = _e_tile(H, lam_tile)
+    z_cur = _e_z(H, lam_z)
     best_H = H.copy(); best_E = E_cur
-    best_tot = E_cur + _e_goal(corr_cur, n, lam_goal) + tile_cur
+    best_tot = E_cur + _e_goal(corr_cur, n, lam_goal) + tile_cur + z_cur
 
     T = T_start; steps = 0; accepts = 0; t0 = time.monotonic()
 
@@ -333,20 +355,25 @@ def micromag_sa(order, T_start=10.0, T_end=0.01, cooling=0.999, max_steps=50000,
         # Save current state for undo
         H_save = H.copy()
 
-        # Perform n_swap exchanges
-        ok = True
-        for _ in range(n_swap):
-            if not _swap_pair(H, rng):
-                ok = False; break
-
-        if not ok:
-            H = H_save; steps += 1
-            # no proposal happened — T holds, but the stop flag must still
-            # be observed or a persistently-failing swap loop runs forever
-            if (stop_flag is not None and steps % 500 == 0
-                    and stop_flag.is_set()):
-                break
-            continue
+        # Gerzon move: with lam_z > 0, a fraction of proposals flip the
+        # 45°/225° (L_F, R_B) pair instead of a polarity swap.
+        if lam_z > 0.0 and n >= 2 and rng.random() < 0.25:
+            from .gerzon import flip_cancel_pair
+            flip_cancel_pair(H, int(rng.integers(0, n - 1)),
+                             int(rng.integers(0, n - 1)))
+        else:
+            ok = True
+            for _ in range(n_swap):
+                if not _swap_pair(H, rng):
+                    ok = False; break
+            if not ok:
+                H = H_save; steps += 1
+                # no proposal happened — T holds, but the stop flag must still
+                # be observed or a persistently-failing swap loop runs forever
+                if (stop_flag is not None and steps % 500 == 0
+                        and stop_flag.is_set()):
+                    break
+                continue
 
         E_new, _, _, _ = total_energy(H, lam_ex=lam_ex, lam_ani=lam_ani)
         delta = E_new - E_cur
@@ -356,13 +383,16 @@ def micromag_sa(order, T_start=10.0, T_end=0.01, cooling=0.999, max_steps=50000,
                    - _e_goal(corr_cur, n, lam_goal)
         tile_new = _e_tile(H, lam_tile)
         delta += tile_new - tile_cur
+        z_new = _e_z(H, lam_z)
+        delta += z_new - z_cur
 
         if delta < 0 or rng.random() < math.exp(-delta / max(T, 1e-10)):
             E_cur = E_new; accepts += 1
             tile_cur = tile_new
+            z_cur = z_new
             if G is not None:
                 corr_cur = corr_new
-            tot = E_cur + _e_goal(corr_cur, n, lam_goal) + tile_cur
+            tot = E_cur + _e_goal(corr_cur, n, lam_goal) + tile_cur + z_cur
             if tot < best_tot:
                 best_H = H.copy(); best_E = E_cur; best_tot = tot
         else:
@@ -392,25 +422,41 @@ def micromag_sa(order, T_start=10.0, T_end=0.01, cooling=0.999, max_steps=50000,
                             (best_H.astype(np.int64)
                              * G.astype(np.int64)).sum())
                         best_tot = (best_E + _e_goal(corr_best, n, lam_goal)
-                                    + _e_tile(best_H, lam_tile))
+                                    + _e_tile(best_H, lam_tile)
+                                    + _e_z(best_H, lam_z))
                 lt = live_params.get("lam_tile")
                 if lt is not None:
                     lam_tile = float(lt)
                     tile_cur = _e_tile(H, lam_tile)
                     eg = _e_goal(corr_cur, n, lam_goal) if G is not None else 0.0
-                    best_tot = best_E + eg + _e_tile(best_H, lam_tile)
+                    best_tot = (best_E + eg + _e_tile(best_H, lam_tile)
+                                + _e_z(best_H, lam_z))
+                lz = live_params.get("lam_z")
+                if lz is not None:
+                    lam_z = float(lz)
+                    z_cur = _e_z(H, lam_z)
+                    eg = _e_goal(corr_cur, n, lam_goal) if G is not None else 0.0
+                    best_tot = (best_E + eg + _e_tile(best_H, lam_tile)
+                                + _e_z(best_H, lam_z))
             if callback is not None:
                 d = {"step": steps, "T": T, "E": E_cur,
                      "best_E": best_E, "accepts": accepts, "H": best_H,
                      "E_goal": _e_goal(corr_cur, n, lam_goal)
                      if G is not None else 0.0,
-                     "E_tile": tile_cur}
+                     "E_tile": tile_cur,
+                     "E_z": z_cur}
                 if G is not None:
                     d["goal_agree"] = (n * n + corr_cur) / (2.0 * n * n)
                 if lam_tile > 0.0:
                     ft = flux_tiles(best_H)
                     d["h8_agree"] = ft.get("h8_agree")
                     d["n_tiles"] = ft.get("n_tiles")
+                if lam_z > 0.0:
+                    from .gerzon import decode_cells
+                    al = decode_cells(best_H, stride=2)
+                    d["n_h2"] = al["n_h2"]
+                    d["n_wall"] = al["n_wall"]
+                    d["n_cohesive"] = al["n_cohesive"]
                 callback(d)
             if stop_flag is not None and stop_flag.is_set():
                 break
@@ -427,6 +473,12 @@ def micromag_sa(order, T_start=10.0, T_end=0.01, cooling=0.999, max_steps=50000,
         ft = flux_tiles(best_H)
         info["h8_agree"] = ft.get("h8_agree")
         info["n_tiles"] = ft.get("n_tiles")
+    if lam_z > 0.0:
+        info["E_z"] = _e_z(best_H, lam_z)
+        from .gerzon import decode_cells
+        al = decode_cells(best_H, stride=2)
+        info["n_h2"] = al["n_h2"]
+        info["n_wall"] = al["n_wall"]
     return best_H, info
 
 

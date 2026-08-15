@@ -49,10 +49,12 @@ channel count, and FOA is a normalized H4.
   `routes_search.py` (Phase 2: /api/search job endpoints + `/ws/job/{id}`
   progress WebSocket with mid-run micromag retune via `job.params["live"]`),
   `routes_sim.py` (Phase 3: /api/sim/micromag annealing lab with live
-  `site_energy`/`energy_gradient`/`flux_map` heatmap frames; optional
-  `goal_order` (= `order`, must be in the library) anneals toward that
-  library matrix via `micromag_sa`'s goal attraction — frames carry
-  `E_goal`/`goal_agree`, and `lam_goal` is mid-run retunable),
+  `site_energy`/`energy_gradient`/`flux_map`/`gerzon.Z_wall` heatmap
+  frames; optional `goal_order` (= `order`, must be in the library)
+  anneals toward that library matrix via `micromag_sa`'s goal
+  attraction — frames carry `E_goal`/`goal_agree`, and `lam_goal` is
+  mid-run retunable; `lam_z` is the Gerzon H₂ prior, live-retunable;
+  `GET /api/sim/gerzon` inspects a start matrix's Z-wall with no anneal),
   `routes_hoa.py` (Phase 4: /api/hoa speaker-array designer, scene
   encode/rotate/analyze with one-shot WAV tokens),
   `routes_gen.py` (Phase 5a: /api/gen terrain/orbital/noise-field
@@ -403,6 +405,7 @@ channel count, and FOA is a normalized H4.
   H.256 counts 341/171/171/341 and top-left = H.128; Paley does
   not tile; orders ≡ 4 mod 8 cannot; open uses noted in
   `flux_tiles` docstring; `lam_tile` SA prior is live;
+  `lam_z` Gerzon H₂ prior + 45°/225° pair-flip when > 0;
   cloth/touch/meta live in the Materials tab),
   optional
   `goal`/`lam_goal` attraction — E_goal = lam_goal per entry disagreeing

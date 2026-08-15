@@ -170,6 +170,11 @@ Tabs:
   Walsh *placement* (H.256 tile counts 341/171/171/341, nested
   top‑left = H.128). Paley/generic library matrices do not tile.
   Search prior: `lam_tile` rewards H.8 (or H.4) tessellation.
+  Gerzon AB: `lam_z` rewards stride-2 H₂ cells in the 1975 WXYZ
+  basis (`E_z = lam_z · mean((|Z_int|−2)²)`); a fraction of moves
+  flip the 45°/225° (L_F, R_B) cancel pair. The [GERZON] layer is
+  the overlapping |Z| wall field; [READ GERZON] inspects a start
+  matrix without annealing.
 - **Materials** — three homes for the same catalog. CLOTH is a two‑layer
   yarn (+ face / − reverse, walls are cuts). TOUCH is a mutual‑cap
   pad (each wall bond is a capacitor). META is a spin‑ice unit cell

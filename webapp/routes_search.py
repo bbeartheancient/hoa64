@@ -517,7 +517,8 @@ async def job_ws(ws: WebSocket, job_id: str) -> None:
                 JOBS.cancel(job.id)
             elif op == "set":
                 live = job.params.setdefault("live", {})
-                for key in ("cooling", "lam_ex", "lam_ani", "lam_goal"):
+                for key in ("cooling", "lam_ex", "lam_ani", "lam_goal",
+                            "lam_tile", "lam_z"):
                     if msg.get(key) is not None:
                         live[key] = float(msg[key])
 
