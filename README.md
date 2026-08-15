@@ -126,6 +126,9 @@ Tabs:
   (4 unique 16×16 / 32×32 / … tiles); the large‑order “variation” is
   Walsh *placement* (H.256 tile counts 341/171/171/341, nested
   top‑left = H.128). Paley/generic library matrices do not tile.
+  Open (not built): SA prior, conductive‑cloth / touchpad electrode
+  weave, metamaterial unit cell — the catalog is not a named object
+  in the Walsh literature that we can find.
 - **HOA Studio** — speaker‑array designer, scene encode/rotate/analyze
 - **Terrain** — `[GENERATE]` / `[SURVEY]` sidebar switch.
   GENERATE is the Hadamard‑layered fBm heightfield with per‑octave

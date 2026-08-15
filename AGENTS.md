@@ -306,7 +306,9 @@ channel count, and FOA is a normalized H4.
   `flux_tiles` H.8 tessellation catalog (Sylvester / A⊗H₈ → exactly
   four 8×8 wall tiles at every dyadic scale, Walsh placement so
   H.256 counts 341/171/171/341 and top-left = H.128; Paley does
-  not tile; orders ≡ 4 mod 8 cannot),
+  not tile; orders ≡ 4 mod 8 cannot; open uses noted in
+  `flux_tiles` docstring — SA prior / cloth-touchpad weave /
+  metamaterial cell, not built),
   optional
   `goal`/`lam_goal` attraction — E_goal = lam_goal per entry disagreeing
   with ±goal, sign fixed at start since global sign is gauge), `tile_search.py` (2×2 H2-cell SA),

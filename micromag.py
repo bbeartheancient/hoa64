@@ -156,6 +156,18 @@ def flux_tiles(H, tile: int = 8) -> dict:
     Construction use: to *lock in* the H.8 energy motif at order 8m,
     take ``hadamard_product(A, sylvester(8))`` (H₈ on the right).
     The open gaps below 2000 are all 4 (mod 8) and cannot be A⊗H₈.
+
+    **Open uses (not implemented).**  The 4-tile catalog does not appear
+    to be a named object in the Hadamard / Walsh literature — it is
+    just the domain-wall picture of H₂^{⊗k}.  Mean W = ½ is half the
+    random-Ising wall density, so the pattern is a *minimum-entropy
+    periodic frustration*.  Speculative homes: (1) a search prior —
+    reward tessellating flux when hunting new orders; (2) a weave /
+    knit / PCB-trace layout for conductive cloth or capacitive
+    touchpads, where the H.8 atom is one sensor cell and the Walsh
+    placement gives a hierarchical electrode addressing with known
+    neighbour-balance; (3) a metamaterial / spin-ice analogue with
+    one tile = one unit cell.  None of these are built yet.
     """
     W = flux_map(H)
     n = int(W.shape[0])
