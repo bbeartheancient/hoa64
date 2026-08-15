@@ -4,11 +4,16 @@
 //            ([LOSS][ACC][VAL_ACC] data-series toggles). [CANCEL] → ws
 //            {op:"cancel"} + POST cancel; on end GET /api/search/{id}
 //            shows val_acc / skipped classes.
-//   ANALYZE  POST /api/noise/analyze {path} XOR {live_seconds} → top class,
-//            per-class probabilities (horizontal bar list, fg bars on a dim
-//            track, top class .good) and the log-mel spectrogram as a
-//            retinted PNG canvas. Live capture records from the default mic
-//            (trusted-local, like the other path-taking endpoints).
+//   ANALYZE  POST /api/noise/analyze {path} XOR {live_seconds[, live_source]}
+//            → top class, per-class probabilities (horizontal bar list, fg
+//            bars on a dim track, top class .good) and the log-mel spectrogram
+//            as a retinted PNG canvas. live_source=mic records from the
+//            default mic (trusted-local, like the other path-taking
+//            endpoints); the RF sources (wifi/ble) capture local radio-counter
+//            telemetry via rf_capture and render it to baseband — the response
+//            then carries a `capture` stats block shown in the status line.
+//            GET /api/noise/classes reports live_sources availability
+//            (unavailable sources are disabled in the selector).
 // Model status comes from GET /api/noise/classes on init.
 
 import { connect } from "/js/ws.js";
@@ -16,7 +21,7 @@ import { makeStripChart } from "/js/viz/stripchart.js";
 import { retintCanvas, themeColor } from "/js/theme.js";
 
 let msgEl, modelStatusEl, tStatusEl, tStatsEl, cancelBtn, trainBtn;
-let melCanvas, melCell, barsHost;
+let melCanvas, melCell, barsHost, sourceSel;
 let tChart;
 let ws = null;
 let currentJob = null;
@@ -89,6 +94,7 @@ function handleTrainFrame(d) {
     return;
   }
   if (d.type === "progress") {
+    if (d.status_text) tStatusEl.textContent = d.status_text; // pre-epoch phase (dataset load)
     if (d.epoch !== undefined) {
       tChart.push({ LOSS: d.loss, ACC: d.acc, VAL_ACC: d.val_acc });
       const bits = [`epoch ${d.epoch}`];
@@ -184,6 +190,23 @@ async function refreshClasses() {
       ? `model trained — ${m.path}`
       : "no trained model — train a model first";
     modelStatusEl.className = m.trained ? "status-line good" : "status-line dim";
+    if (sourceSel && d.live_sources) {
+      const prev = sourceSel.value || "mic";
+      sourceSel.replaceChildren(
+        ...Object.entries(d.live_sources).map(([name, s]) => {
+          const opt = el(
+            "option",
+            { value: name },
+            s.available
+              ? name.toUpperCase() + (s.iface || s.dev ? ` (${s.iface || s.dev})` : "")
+              : `${name.toUpperCase()} — ${s.reason || "unavailable"}`
+          );
+          if (!s.available) opt.disabled = true;
+          return opt;
+        })
+      );
+      sourceSel.value = d.live_sources[prev] && d.live_sources[prev].available ? prev : "mic";
+    }
     const host = document.getElementById("noi-class-list");
     if (host) {
       host.replaceChildren(
@@ -246,9 +269,16 @@ async function doAnalyze(body) {
       drawPng(melCanvas, d.mel_png_b64);
     }
     renderBars();
+    const cap = d.capture;
+    const capBit = cap
+      ? ` · ${cap.source} ${cap.iface || cap.dev || ""}` +
+        ` · ${cap.packets ?? cap.events ?? 0} ${cap.source === "wifi" ? "pkts" : "evts"}` +
+        ` · ${Math.round((cap.duty || 0) * 100)}% duty` +
+        (cap.note ? ` · ${cap.note}` : "")
+      : "";
     msg(
       `top: ${d.top} (${((d.probs[d.top] || 0) * 100).toFixed(1)}%) · ` +
-        `fs ${d.fs} Hz · ${Number(d.duration_s).toFixed(2)} s`,
+        `fs ${d.fs} Hz · ${Number(d.duration_s).toFixed(2)} s${capBit}`,
       "ok"
     );
   } catch (e) {
@@ -267,8 +297,13 @@ function doAnalyzePath() {
 
 function doCapture() {
   const secs = numVal("noi-a-live", 3);
-  msg(`capturing ${secs}s from the default mic…`);
-  doAnalyze({ live_seconds: secs });
+  const source = sourceSel ? sourceSel.value : "mic";
+  msg(
+    source === "mic"
+      ? `capturing ${secs}s from the default mic…`
+      : `capturing ${secs}s of ${source} radio telemetry…`
+  );
+  doAnalyze({ live_seconds: secs, live_source: source });
 }
 
 // ---- tab lifecycle ----------------------------------------------------------
@@ -343,6 +378,7 @@ export function init(container) {
       { class: "row" },
       el("label", {}, "live capture s"),
       el("input", { id: "noi-a-live", type: "number", value: "3", min: "0.5", max: "30", step: "0.5" }),
+      (sourceSel = el("select", { id: "noi-a-source" }, el("option", { value: "mic" }, "MIC"))),
       el("button", { class: "btn", id: "noi-a-capture" }, "Capture")
     ),
     el("div", { class: "dim" }, "needs a trained model — * labels are synthesized RF baseband (BLE/WiFi/Zigbee/LoRa envelopes), not the carrier"),

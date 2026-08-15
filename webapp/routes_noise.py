@@ -4,15 +4,20 @@ Wraps `noise_data` (NOISEX-92 access + log-mel DSP) and `dit_noise`
 (DiT-backbone classifier, lazy torch):
 
 * ``GET  /classes`` — 19-class list (15 NOISEX-92 + 4 RF synth) +
-  trained-model status.
+  trained-model status + ``live_sources`` (`rf_capture.live_sources`:
+  per-source availability of mic / local wifi / ble radio capture).
 * ``POST /train``   — JobManager job running `dit_noise.train_model`
   (Muon default, AdamW optional); per-epoch ``{epoch, loss, acc,
   val_acc}`` frames stream over the existing ``WS /ws/job/{job_id}``;
   `_BudgetStop` becomes the stop_flag.
-* ``POST /analyze`` — classify a WAV file path OR a live microphone
-  capture (`live_audio.capture_wav`, trusted-local only like the other
-  path-taking endpoints); returns class probabilities + the log-mel
-  spectrogram as a heatmap PNG.
+* ``POST /analyze`` — classify a WAV file path OR a live capture
+  (``live_seconds`` + ``live_source``): ``mic`` goes through
+  `live_audio.capture_wav` (trusted-local only like the other
+  path-taking endpoints), the RF sources (wifi/ble) go through
+  `rf_capture.capture` — measured radio-counter cadence rendered to
+  baseband, no temp WAV, capture ``stats`` echoed in the response;
+  returns class probabilities + the log-mel spectrogram as a heatmap
+  PNG.
 """
 
 from __future__ import annotations
@@ -25,7 +30,7 @@ import numpy as np
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from .. import audio_io, dit_noise, noise_data
+from .. import audio_io, dit_noise, noise_data, rf_capture
 from ._png import heatmap_png
 from .jobs import JOBS, Job, report
 from .routes_hadamard import _jsafe
@@ -46,6 +51,7 @@ def classes() -> dict:
             "trained": _MODEL_PATH.exists(),
             "path": str(_MODEL_PATH) if _MODEL_PATH.exists() else None,
         },
+        "live_sources": rf_capture.live_sources(),
     }
 
 
@@ -62,6 +68,11 @@ class TrainReq(BaseModel):
 def _run_train(job: Job) -> dict:
     p = job.params
     stop = _BudgetStop(job)
+
+    # the dataset load (first run downloads NOISEX-92) is silent until the
+    # first epoch callback — report a status line immediately so the client
+    # shows activity during it
+    report(job, engine="dit_noise", status_text="loading dataset…")
 
     def cb(frame: dict) -> None:
         report(job, engine="dit_noise", **frame)
@@ -104,7 +115,8 @@ def train(req: TrainReq) -> dict:
 
 class AnalyzeReq(BaseModel):
     path: str | None = None          # existing WAV on this machine (trusted-local)
-    live_seconds: float | None = None  # record from the default mic instead
+    live_seconds: float | None = None  # record live instead (see live_source)
+    live_source: str = "mic"         # mic | wifi | ble — rf_capture.live_sources() keys
 
 
 def _mel_png_b64(mel: np.ndarray) -> str:
@@ -120,17 +132,35 @@ def analyze(req: AnalyzeReq) -> dict:
     if not _MODEL_PATH.exists():
         raise HTTPException(status_code=400, detail="no trained model — run /api/noise/train first")
     tmp = None
+    cap_stats = None
     try:
         if req.live_seconds is not None:
             if not (0.5 <= req.live_seconds <= 30.0):
                 raise HTTPException(status_code=400, detail="live_seconds must be 0.5..30")
-            from .. import live_audio  # lazy: needs a capture backend
-            tmp = Path(tempfile.mkdtemp(prefix="hoa64_noise_")) / "capture.wav"
-            try:
-                live_audio.capture_wav(tmp, duration_sec=req.live_seconds)
-            except Exception as e:
-                raise HTTPException(status_code=400, detail=f"capture failed: {e}")
-            x, fs = audio_io.read_wav(tmp)
+            if req.live_source == "mic":
+                from .. import live_audio  # lazy: needs a capture backend
+                tmp = Path(tempfile.mkdtemp(prefix="hoa64_noise_")) / "capture.wav"
+                try:
+                    live_audio.capture_wav(tmp, duration_sec=req.live_seconds)
+                except Exception as e:
+                    raise HTTPException(status_code=400, detail=f"capture failed: {e}")
+                x, fs = audio_io.read_wav(tmp)
+            else:
+                srcs = rf_capture.live_sources()
+                info = srcs.get(req.live_source)
+                if info is None:
+                    raise HTTPException(status_code=400, detail=(
+                        f"unknown live_source {req.live_source!r}; "
+                        f"expected one of {sorted(srcs)}"))
+                if not info.get("available"):
+                    raise HTTPException(status_code=400, detail=(
+                        f"live_source {req.live_source!r} unavailable: "
+                        f"{info.get('reason', 'not detected')}"))
+                try:
+                    x, fs, cap_stats = rf_capture.capture(req.live_source,
+                                                          req.live_seconds)
+                except ValueError as e:
+                    raise HTTPException(status_code=400, detail=f"capture failed: {e}")
         else:
             try:
                 x, fs = audio_io.read_wav(req.path)
@@ -143,13 +173,16 @@ def analyze(req: AnalyzeReq) -> dict:
         if x.size < 2048:
             raise HTTPException(status_code=400, detail="audio too short")
         out = dit_noise.classify(x, fs)
-        return _jsafe({
+        res = {
             "top": out["top"],
             "probs": out["probs"],
             "mel_png_b64": _mel_png_b64(out["mel"]),
             "fs": fs,
             "duration_s": float(x.size) / float(fs),
-        })
+        }
+        if cap_stats is not None:
+            res["capture"] = cap_stats
+        return _jsafe(res)
     finally:
         if tmp is not None:
             tmp.unlink(missing_ok=True)

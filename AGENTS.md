@@ -119,9 +119,11 @@ channel count, and FOA is a normalized H4.
   B.Cu GND pour so reverse-layer cells stay discrete, and the response
   carries `preview_board` for the FOOTPRINT/BOARD toggle),
   `routes_noise.py` (/api/noise: /classes lists 19 labels — 15 NOISEX-92
-  + 4 synthesized RF baseband envelopes ble/wifi/zigbee/lora —
-  /train DiT job with muon|adamw, /analyze WAV-path or live-mic
-  classify → mel PNG + probs), `routes_mcu.py` (/api/mcu Microcontroller lab: /firmware LED
+  + 4 synthesized RF baseband envelopes ble/wifi/zigbee/lora — plus
+  `live_sources` availability from rf_capture;
+  /train DiT job with muon|adamw, /analyze WAV-path or live capture —
+  mic via live_audio, local wifi/ble radio telemetry via rf_capture
+  `live_source`, capture stats echoed — classify → mel PNG + probs), `routes_mcu.py` (/api/mcu Microcontroller lab: /firmware LED
   matrix (ESP32/Teensy Arduino + CircuitPython) and ESP-NOW mesh node
   sketches via one-shot token downloads, /push GRB frame → device HTTP
   POST (bare-host validated, trusted-local), /mesh/collect gateway RSSI
@@ -248,7 +250,9 @@ channel count, and FOA is a normalized H4.
   with per-challenge status/engine chips that deep-link via
   `hoa64:open-tab`), Noise (`js/tabs/noise.js` — DiT classifier
   training with a loss/acc strip chart, muon|adamw selector, 19-class
-  chip list (* = synthesized RF baseband), + WAV/live-mic analysis
+  chip list (* = synthesized RF baseband), + WAV/live analysis
+  (mic or local wifi/ble radio capture via a `#noi-a-source` selector,
+  RF runs show capture stats in the status line)
   with mel spectrogram and class-probability bars), Microcontroller
   (`js/tabs/microcontroller.js` — `#mcu-layer-select` LED/MESH/EDGE:
   LED paints WS2812 frames (serpentine GRB) and downloads
@@ -387,7 +391,14 @@ channel count, and FOA is a normalized H4.
   window-level train/val split over 15 long recordings + 4 synth
   classes means val_acc≈1 reflects within-recording familiarity —
   needs a larger database and unseen-source testing before
-  generalization claims).
+  generalization claims),
+  `rf_capture.py` (ALPHA BUILD — live radio-telemetry capture for the
+  analyzer: polls /proc/net/dev (wifi) and the HCIGETDEVINFO ioctl (ble)
+  counters at ~100 Hz, renders the measured duty envelope into audio
+  baseband with `noise_data._shaped_noise` — the synth_waveform
+  envelope-equivalent family with measured, not scripted, timing;
+  managed-mode wifi sees this station's traffic only; zigbee/lora
+  report unavailable, idle captures are never fabricated).
 - Program-frame / optimizer modules: `darpa_challenges.py` (the 23
   DARPA mathematical challenges + honest tooling alignment —
   `active`/`partial`/`latent`/`none`; statuses are *not* progress

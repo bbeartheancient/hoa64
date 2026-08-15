@@ -102,6 +102,7 @@ python3 -m hoa64.cli webapp
 | `site_survey.py` | SRTM virtual site survey: tight DEM window, path profile, 4/3‑earth Fresnel/Deygout, radio horizon, Esri satellite mosaic *(alpha)* |
 | `noise_data.py` | NOISEX‑92 access + 4 synthesized RF baseband classes (BLE/WiFi/Zigbee/LoRa) + log‑mel DSP *(alpha)* |
 | `dit_noise.py` | DiT‑backbone noise classifier (adaLN‑Zero, Muon/AdamW, lazy torch) *(alpha)* |
+| `rf_capture.py` | Live local‑radio capture for the analyzer: wifi (/proc/net/dev) + BLE (HCI ioctl) activity counters → measured‑cadence baseband envelope *(alpha)* |
 | `muon.py` | Muon/Dion3 optimizer: cursed-quintic Newton–Schulz orthogonalization of momentum (Gram-NS + row subsample) *(alpha)* |
 | `gerzon.py` | Gerzon 1975 AB module (A-format → WXYZ); H₄ after L_F↔L_B swap; H₂/wall cell SA |
 | `webapp/` | FastAPI + vanilla‑JS web GUI (see Webapp below) |
@@ -235,8 +236,13 @@ Tabs:
   NOISEX‑92 plus synthesized BLE/WiFi/Zigbee/LoRa *baseband envelopes*
   (cadence/duty/spectral shape at 19.98 kHz — not the RF carrier) with
   a Muon (Dion3) or AdamW optimizer and a live loss/accuracy chart,
-  then classify WAV files or live mic captures with a log‑mel
-  spectrogram + class‑probability bars
+  then classify WAV files or live captures with a log‑mel
+  spectrogram + class‑probability bars. Live capture sources: the mic,
+  or the machine's own radios — wifi (via /proc/net/dev counters) and
+  BLE (via the HCIGETDEVINFO ioctl) activity polled at ~100 Hz and
+  rendered as a measured‑cadence baseband envelope (managed‑mode wifi
+  sees this station's traffic only; Zigbee/LoRa report unavailable
+  without a local radio, idle captures are never fabricated)
 - **Microcontroller** *(ALPHA — firmware is template-generated; hardware
   testing is on the user)* — `[LED]` paints WS2812 frames (serpentine
   GRB) and downloads ESP32 / Teensy / CircuitPython sketches, or
