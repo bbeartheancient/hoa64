@@ -10,6 +10,9 @@ import { enhanceControls } from "/js/controls.js";
 const content = document.getElementById("tab-content");
 const loaded = {};
 let activeName = null;
+// bust the browser module cache on each page load so tab JS edits show up
+// without a hard-reload dance (the LAN mirror especially kept stale files)
+const TAB_V = Date.now();
 
 async function activate(name) {
   // let the outgoing tab release resources (WebGL contexts, sockets…)
@@ -26,7 +29,7 @@ async function activate(name) {
     .forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
   content.innerHTML = "";
   try {
-    if (!loaded[name]) loaded[name] = await import(`/js/tabs/${name}.js`);
+    if (!loaded[name]) loaded[name] = await import(`/js/tabs/${name}.js?v=${TAB_V}`);
     loaded[name].init(content);
     enhanceControls(content); // themed number steppers + file browse buttons
   } catch (e) {

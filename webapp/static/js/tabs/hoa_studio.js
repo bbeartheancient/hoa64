@@ -89,12 +89,13 @@ function threeToAzEl(v) {
 // ---- three.js scene -----------------------------------------------------
 
 function initThree(container) {
-  const w = 560;
-  const h = 560;
+  const w = 256;
+  const h = 256;
   renderer = new THREE.WebGLRenderer({ antialias: true });
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5) * getSetting("renderScale")); // perf: cap DPR
-  renderer.setSize(w, h);
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5) * getSetting("renderScale"));
+  renderer.setSize(w, h, false); // CSS owns display size via .sim-canvas
   renderer.setClearColor(new THREE.Color(themeColor("bg")));
+  renderer.domElement.classList.add("sim-canvas");
   container.appendChild(renderer.domElement);
 
   scene3d = new THREE.Scene();
@@ -147,16 +148,10 @@ function initThree(container) {
   pipeline = makePostPipeline(THREE, renderer, scene3d, camera, {
     mode: THEME_POST[currentTheme()] || "crt",
   });
-  pipeline.setTheme({ fg: themeColor("fg"), bg: themeColor("bg"), ramp: THEMES_ramp() });
+  pipeline.setTheme({ fg: themeColor("fg"), bg: themeColor("bg"), ramp: themeRamp() });
 
   window.addEventListener("themechange", applyThreeTheme);
   renderThree();
-}
-
-function THEMES_ramp() {
-  // active visualizer ramp (cgb palette packs + vga subthemes included) for
-  // the post pass palette LUT
-  return themeRamp();
 }
 
 function applyThreeTheme() {
@@ -167,7 +162,7 @@ function applyThreeTheme() {
   doaArrow.setColor(new THREE.Color(themeColor("accent")));
   if (pipeline) {
     pipeline.setMode(THEME_POST[currentTheme()] || "crt");
-    pipeline.setTheme({ fg: themeColor("fg"), bg: themeColor("bg"), ramp: THEMES_ramp() });
+    pipeline.setTheme({ fg: themeColor("fg"), bg: themeColor("bg"), ramp: themeRamp() });
   }
   if (currentPowerMap) showPowerMap(currentPowerMap);
   else renderThree();
@@ -447,7 +442,13 @@ export function init(container) {
       el("button", { class: "btn", id: "hoa-render" }, "Render scene"),
       (wavLink = el("a", { class: "btn hidden", href: "#" }, "Download WAV"))
     ),
-    (msgEl = el("div", { class: "msg" })),
+    (msgEl = el("div", { class: "msg" }))
+  );
+
+  const analysisPanel = el(
+    "div",
+    { class: "panel" },
+    el("h2", {}, "Analysis"),
     el(
       "div",
       { class: "status-line" },
@@ -458,26 +459,7 @@ export function init(container) {
     (powerImg = el("img", { class: "power-img hidden", alt: "power map" }))
   );
 
-  threeContainer = el("div", { class: "panel three-wrap" }, el("h2", {}, "Sphere (drag to orbit)"));
-
-  // Scene panel sits NEXT TO the sphere visualizer (Bug 4: it overflowed
-  // the 340px left column) — both flex inside a .panel-row, scene takes
-  // the space its 4 source rows + rotation sliders actually need
-  scenePanel.classList.add("scene-panel");
-  container.replaceChildren(
-    el(
-      "div",
-      { class: "lab" },
-      el("div", {}, designer),
-      el("div", {}, el("div", { class: "panel-row hoa-row" }, threeContainer, scenePanel))
-    )
-  );
-
-  renderPositionsTable();
-  initThree(threeContainer);
-  showSpeakers(speakers);
-
-  // FX toggle (post pipeline on/off, default from the global FX setting)
+  threeContainer = el("div", { class: "sim-cell" }, el("div", { class: "sim-label" }, "sphere (drag to orbit)"));
   const fxBox = el("input", { type: "checkbox", id: "hoa-fx" });
   fxBox.checked = fxOn;
   fxBox.addEventListener("change", () => {
@@ -485,9 +467,27 @@ export function init(container) {
     setSetting("fx", fxOn);
     renderThree();
   });
-  threeContainer.appendChild(
-    el("label", { class: "fx-toggle" }, fxBox, el("span", {}, "FX (post shader)"))
+  threeContainer.appendChild(el("label", { class: "fx-toggle" }, fxBox, el("span", {}, "FX (post shader)")));
+
+  const viewsPanel = el(
+    "div",
+    { class: "panel" },
+    el("h2", {}, "Sphere"),
+    el("div", { class: "panel-row" }, threeContainer)
   );
+
+  container.replaceChildren(
+    el(
+      "div",
+      { class: "lab" },
+      el("div", {}, designer, scenePanel),
+      el("div", {}, viewsPanel, analysisPanel)
+    )
+  );
+
+  renderPositionsTable();
+  initThree(threeContainer);
+  showSpeakers(speakers);
 
   document.getElementById("hoa-load-preset").addEventListener("click", doPreset);
   document.getElementById("hoa-compute").addEventListener("click", doSpeakers);

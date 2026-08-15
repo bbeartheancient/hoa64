@@ -1,39 +1,26 @@
 // Antenna Lab — antenna design / parts matching / FDTD field sim / wire
 // evolution, all behind ONE viewport with a [DESIGN][PARTS][FIELDS][EVOLVE]
 // layer selector (#ant-layer-select, same convention as #sim-layer-select).
-//   DESIGN  POST /api/antenna/design → ranked candidate table (click a row
-//           for its reasons/explain trace; patch/pifa/loop rows get a
-//           [KICAD] footprint export). A successful run auto-fires the parts
-//           query for the band.
-//   PARTS   POST /api/antenna/parts → off-the-shelf part table with
-//           datasheet / everythingRF links; coverage_note rows dimmed.
-//   FIELDS  POST /api/antenna/fields → {job_id}, streams /ws/job/{id}
-//           frames {step,t_s,e_xy_png_b64,e_xz_png_b64,ar_png_b64?,emax,
-//           e_rms,e_rms_lo?,e_rms_hi?} onto two (three) heatmap canvases +
-//           an E_RMS strip chart. [CANCEL] → ws {op:"cancel"} + POST cancel.
-//   EVOLVE  POST /api/antenna/evolve → {job_id}, streams
-//           {step,T,E,best_E,accepts,points,z_in,gain_dbi,s11_db}; the best
-//           wire geometry polyline is drawn on a 2D canvas (x,y projection,
-//           fg on bg, axes cross in dim), E/BEST_E/T ride a strip chart; the
-//           final frame's pattern_png_b64 is shown retinted beside it.
-//   SURVEY  POST /api/antenna/survey → terrain elevation profile along the
-//           TX→RX great-circle path (filled dim polyline), LOS sight line
-//           (fg), mast ticks, worst-clearance point (accent) on a 640×200
-//           chart canvas + a link-budget stats table (verdict / clearance /
-//           Fresnel ratio / diffraction loss / FSPL / received power); then
-//           POST /api/antenna/survey/map → retinted terrain heatmap with a
-//           mercator-projected path/markers overlay redrawn on themechange.
+//   DESIGN  POST /api/antenna/design → ranked candidate table
+//   PARTS   POST /api/antenna/parts → off-the-shelf part table
+//   FIELDS  POST /api/antenna/fields → 3-D field-slice viewer
+//           (Three.js orthogonal planes) + E_RMS strip chart
+//   EVOLVE  POST /api/antenna/evolve → wire geometry SA + E/BEST_E/T chart
+//   KICAD   PCB footprint export for recommended designs
+//   SMITH   Γ-plane MoM Z_in(f) sweep with interactive hover readout
+// Site survey has moved to the Terrain tab (terrain.js — [SURVEY] button).
 // Server PNG canvases go through retintCanvas (registers them for
 // themechange re-tints); the wire canvas redraws on themechange itself.
 // Panels are kept attached and toggled with .hidden so a running job's
-// stream keeps updating its canvases while another layer is up (the strip
-// chart drops its themechange listener on detached canvases).
+// stream keeps updating its canvases while another layer is up.
 
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { connect } from "/js/ws.js";
 import { makeStripChart } from "/js/viz/stripchart.js";
 import { retintCanvas, themeColor } from "/js/theme.js";
 
-const LAYERS = { design: "DESIGN", parts: "PARTS", fields: "FIELDS", evolve: "EVOLVE", kicad: "KICAD", smith: "SMITH", survey: "SURVEY" };
+const LAYERS = { design: "DESIGN", parts: "PARTS", fields: "FIELDS", evolve: "EVOLVE", kicad: "KICAD", smith: "SMITH" };
 // entry.type → kicad design_type (first substring match wins)
 const KICAD_MAP = [
   ["pifa", "meander_ifa"],
@@ -49,12 +36,12 @@ let lastBand = null; // {f_lo_mhz, f_hi_mhz, f_center_mhz} from the last design 
 
 // fields job state
 let fWs = null, fJob = null, fChart, fCancelBtn, fStatusEl, fStatsEl;
-let fXyCanvas, fXzCanvas, fArCanvas, fArCell;
+let f3Renderer, f3Scene, f3Camera, f3Controls, f3Container;
+let f3PlaneXY, f3PlaneXZ, f3TexXY, f3TexXZ, f3Raf = null;
+let f3Cell = null;
 // evolve job state
 let eWs = null, eJob = null, eChart, eCancelBtn, eStatusEl, eStatsEl;
 let smithCanvas, smithReadout, lastSweep = null;
-let svProfileCanvas, svMapCanvas, svStatsEl, svStatusEl;
-let lastSurvey = null, lastMap = null; // redrawn on themechange
 let lastEvolvePoints = null, lastDesignEntries = null;
 let wireCanvas, patternCanvas, patternCell;
 let lastPoints = null; // last evolve points — redrawn on themechange
@@ -175,6 +162,7 @@ function selectLayer(name) {
   for (const [k, p] of Object.entries(panels)) {
     p.classList.toggle("hidden", k !== layer);
   }
+  if (name === "fields" && f3Cell) initFieldsThree(f3Cell);
 }
 
 // ---- DESIGN -----------------------------------------------------------------
@@ -319,12 +307,6 @@ async function doDesign() {
     // keep the parts band in sync and pre-run the parts query
     document.getElementById("ant-p-flo").value = String(lastBand.f_lo_mhz);
     document.getElementById("ant-p-fhi").value = String(lastBand.f_hi_mhz);
-    // prefill the SURVEY link params from this design run
-    const svF = document.getElementById("ant-v-f");
-    if (svF && d.f_center_mhz) svF.value = String(d.f_center_mhz);
-    const g0 = lastDesignEntries[0]?.design?.gain_dbi;
-    const svG = document.getElementById("ant-v-gtx");
-    if (svG && g0 !== undefined) svG.value = String(g0);
     doParts(true);
   } catch (e) {
     msg(`design failed: ${e.message}`, "error");
@@ -387,6 +369,80 @@ async function doParts(quiet = false) {
 
 // ---- FIELDS -----------------------------------------------------------------
 
+function f3Render() {
+  if (!f3Renderer || !f3Scene || !f3Camera) return;
+  if (f3Raf) return; // throttle to rAF
+  f3Raf = requestAnimationFrame(() => { f3Raf = null; f3Renderer.render(f3Scene, f3Camera); });
+}
+
+function initFieldsThree(container) {
+  if (f3Renderer) return;
+  const w = 256;
+  f3Renderer = new THREE.WebGLRenderer({ antialias: true });
+  f3Renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+  f3Renderer.setSize(w, w, false);
+  f3Renderer.setClearColor(new THREE.Color(themeColor("bg")));
+  f3Renderer.domElement.classList.add("sim-canvas");
+  container.appendChild(f3Renderer.domElement);
+  f3Container = container;
+
+  f3Scene = new THREE.Scene();
+  f3Camera = new THREE.PerspectiveCamera(45, 1, 0.01, 100);
+  f3Camera.position.set(0.8, 0.6, 2.2);
+  f3Controls = new OrbitControls(f3Camera, f3Renderer.domElement);
+  f3Controls.addEventListener("change", f3Render);
+
+  f3TexXY = new THREE.CanvasTexture(el("canvas", { width: "128", height: "128" }));
+  f3TexXZ = new THREE.CanvasTexture(el("canvas", { width: "128", height: "128" }));
+  const planeMatXY = new THREE.MeshBasicMaterial({ map: f3TexXY, side: THREE.DoubleSide, transparent: true, opacity: 0.92 });
+  const planeMatXZ = new THREE.MeshBasicMaterial({ map: f3TexXZ, side: THREE.DoubleSide, transparent: true, opacity: 0.92 });
+  f3PlaneXY = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 1.2), planeMatXY);
+  f3PlaneXZ = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 1.2), planeMatXZ);
+  f3PlaneXZ.rotation.x = -Math.PI / 2; // XZ → horizontal
+  f3Scene.add(f3PlaneXY);
+  f3Scene.add(f3PlaneXZ);
+  f3Scene.add(new THREE.AxesHelper(1.0));
+  window.addEventListener("themechange", f3Theme);
+  f3Render();
+}
+
+function f3Theme() {
+  if (!f3Renderer) return;
+  f3Renderer.setClearColor(new THREE.Color(themeColor("bg")));
+  f3Render();
+}
+
+function disposeFieldsThree() {
+  if (f3Raf) cancelAnimationFrame(f3Raf);
+  f3Raf = null;
+  window.removeEventListener("themechange", f3Theme);
+  if (f3Controls) f3Controls.dispose();
+  if (f3Renderer) {
+    if (f3TexXY) f3TexXY.dispose();
+    if (f3TexXZ) f3TexXZ.dispose();
+    f3Scene && f3Scene.children.slice().forEach((o) => { f3Scene.remove(o); o.geometry && o.geometry.dispose(); o.material && o.material.dispose(); });
+    f3Renderer.dispose();
+    f3Renderer.domElement.remove();
+  }
+  f3Renderer = f3Scene = f3Camera = f3Controls = f3Container = f3PlaneXY = f3PlaneXZ = f3TexXY = f3TexXZ = null;
+}
+
+function updateFieldTex(name, b64) {
+  const img = new Image();
+  img.onload = () => {
+    const tex = name === "xy" ? f3TexXY : f3TexXZ;
+    if (!tex) return;
+    const w = tex.source.data.width, h = tex.source.data.height;
+    const ctx = tex.source.data.getContext("2d");
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(0, 0, w, h);
+    ctx.drawImage(img, 0, 0, w, h);
+    tex.needsUpdate = true;
+    f3Render();
+  };
+  img.src = `data:image/png;base64,${b64}`;
+}
+
 function handleFieldFrame(d) {
   if (d.type === "snapshot") {
     fStatusEl.textContent = `job ${d.status} — replaying ${d.history.length} frames`;
@@ -394,12 +450,8 @@ function handleFieldFrame(d) {
     return;
   }
   if (d.type === "progress") {
-    if (d.e_xy_png_b64) drawPng(fXyCanvas, d.e_xy_png_b64);
-    if (d.e_xz_png_b64) drawPng(fXzCanvas, d.e_xz_png_b64);
-    if (d.ar_png_b64) {
-      fArCell.classList.remove("hidden");
-      drawPng(fArCanvas, d.ar_png_b64);
-    }
+    if (d.e_xy_png_b64) updateFieldTex("xy", d.e_xy_png_b64);
+    if (d.e_xz_png_b64) updateFieldTex("xz", d.e_xz_png_b64);
     if (d.e_rms !== undefined) {
       fChart.push({ E_RMS: d.e_rms, E_RMS_LO: d.e_rms_lo, E_RMS_HI: d.e_rms_hi });
     }
@@ -444,9 +496,9 @@ async function doFields() {
     budget_s: 120,
   };
   if (fWs) fWs.close();
+  if (f3Cell) initFieldsThree(f3Cell);
   fChart.clear();
   fStatsEl.replaceChildren();
-  fArCell.classList.add("hidden");
   fStatusEl.textContent = "connecting…";
   msg("starting FDTD run…");
   try {
@@ -529,8 +581,6 @@ function drawWire() {
 function onThemechange() {
   drawWire();
   drawSmith();
-  drawSurveyProfile();
-  drawSurveyMapOverlay(); // the map PNG itself re-tints via retintCanvas
 }
 
 // ---- SMITH ------------------------------------------------------------------
@@ -767,218 +817,6 @@ async function doCancelEvolve() {
   }
 }
 
-// ---- SURVEY -----------------------------------------------------------------
-// Virtual site survey: terrain profile + LOS/Fresnel geometry + link budget
-// (/api/antenna/survey) and a Terrarium-tile terrain heatmap with the path
-// overlaid (/api/antenna/survey/map). Both canvases are plain 2D and redraw
-// on themechange (the map PNG re-tints itself via retintCanvas; only the
-// overlay needs the explicit redraw).
-
-function drawSurveyProfile() {
-  if (!svProfileCanvas) return;
-  const ctx = svProfileCanvas.getContext("2d");
-  const W = svProfileCanvas.width, H = svProfileCanvas.height;
-  const fg = themeColor("fg"), bg = themeColor("bg"), dim = themeColor("dim");
-  const accent = themeColor("accent") || fg;
-  ctx.fillStyle = bg;
-  ctx.fillRect(0, 0, W, H);
-  const s = lastSurvey;
-  if (!s || !Array.isArray(s.dist_m) || s.dist_m.length < 2) {
-    ctx.fillStyle = dim;
-    ctx.font = "11px monospace";
-    ctx.fillText("no survey yet", 8, H / 2);
-    return;
-  }
-  const dist = s.dist_m, elev = s.elev_m;
-  const bulge = Array.isArray(s.bulge_m) ? s.bulge_m : elev.map(() => 0);
-  const ground = elev.map((e, i) => e + bulge[i]); // terrain + 4/3-earth bulge
-  const line = Array.isArray(s.los_line_m) ? s.los_line_m : null;
-  const D = s.path_m || dist[dist.length - 1] || 1;
-  let lo = Infinity, hi = -Infinity;
-  for (let i = 0; i < dist.length; i++) {
-    for (const v of [ground[i], line ? line[i] : ground[i]]) {
-      if (v < lo) lo = v;
-      if (v > hi) hi = v;
-    }
-  }
-  if (hi - lo < 1e-9) hi = lo + 1;
-  const padL = 44, padR = 8, padT = 10, padB = 18;
-  const xOf = (d) => padL + (d / D) * (W - padL - padR);
-  const yOf = (v) => H - padB - ((v - lo) / (hi - lo)) * (H - padT - padB);
-  // terrain silhouette (dim fill)
-  ctx.globalAlpha = 0.55;
-  ctx.fillStyle = dim;
-  ctx.beginPath();
-  ctx.moveTo(xOf(dist[0]), yOf(ground[0]));
-  for (let i = 1; i < dist.length; i++) ctx.lineTo(xOf(dist[i]), yOf(ground[i]));
-  ctx.lineTo(xOf(dist[dist.length - 1]), H - padB);
-  ctx.lineTo(xOf(dist[0]), H - padB);
-  ctx.closePath();
-  ctx.fill();
-  ctx.globalAlpha = 1;
-  // antenna masts: vertical ticks from ground to phase centre at each end
-  if (line) {
-    ctx.strokeStyle = fg;
-    ctx.lineWidth = 1.2;
-    for (const i of [0, dist.length - 1]) {
-      ctx.beginPath();
-      ctx.moveTo(xOf(dist[i]), yOf(ground[i]));
-      ctx.lineTo(xOf(dist[i]), yOf(line[i]));
-      ctx.stroke();
-    }
-    // TX→RX LOS sight line (fg)
-    ctx.beginPath();
-    ctx.moveTo(xOf(dist[0]), yOf(line[0]));
-    for (let i = 1; i < dist.length; i++) ctx.lineTo(xOf(dist[i]), yOf(line[i]));
-    ctx.stroke();
-  }
-  // worst-clearance point (accent) — interpolate the profile at that range
-  if (typeof s.worst_point_dist_m === "number") {
-    const dw = s.worst_point_dist_m;
-    let i = 1;
-    while (i < dist.length - 1 && dist[i] < dw) i++;
-    const t = (dw - dist[i - 1]) / Math.max(dist[i] - dist[i - 1], 1e-9);
-    const gw = ground[i - 1] + t * (ground[i] - ground[i - 1]);
-    const x = xOf(dw), y = yOf(gw);
-    ctx.strokeStyle = accent;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(x, y);
-    ctx.lineTo(x, line ? yOf(line[i - 1] + t * (line[i] - line[i - 1])) : y - 10);
-    ctx.stroke();
-    ctx.fillStyle = accent;
-    ctx.beginPath();
-    ctx.arc(x, y, 3, 0, 2 * Math.PI);
-    ctx.fill();
-  }
-  // axis labels (dim): distance km along x, elevation m along y
-  ctx.fillStyle = dim;
-  ctx.font = "10px monospace";
-  ctx.fillText("0 km", padL, H - 5);
-  const dMax = `${(D / 1000).toFixed(2)} km`;
-  ctx.fillText(dMax, W - padR - ctx.measureText(dMax).width, H - 5);
-  ctx.fillText(`${hi.toFixed(0)} m`, 4, padT + 4);
-  ctx.fillText(`${lo.toFixed(0)} m`, 4, H - padB);
-}
-
-// tile-style mercator: lat → global y fraction, same as the tile servers
-function mercY(lat) {
-  const r = (lat * Math.PI) / 180;
-  return (1 - Math.asinh(Math.tan(r)) / Math.PI) / 2;
-}
-
-function drawSurveyMap() {
-  if (!svMapCanvas) return;
-  const ctx = svMapCanvas.getContext("2d");
-  if (!lastMap || !lastMap.map_png_b64) {
-    ctx.fillStyle = themeColor("bg");
-    ctx.fillRect(0, 0, svMapCanvas.width, svMapCanvas.height);
-    ctx.fillStyle = themeColor("dim");
-    ctx.font = "11px monospace";
-    ctx.fillText("no map yet", 8, svMapCanvas.height / 2);
-    return;
-  }
-  const img = new Image();
-  img.onload = () => {
-    ctx.imageSmoothingEnabled = false;
-    ctx.clearRect(0, 0, svMapCanvas.width, svMapCanvas.height);
-    ctx.drawImage(img, 0, 0, svMapCanvas.width, svMapCanvas.height);
-    retintCanvas(svMapCanvas); // pristine src captured before the overlay
-    drawSurveyMapOverlay();
-  };
-  img.src = `data:image/png;base64,${lastMap.map_png_b64}`;
-}
-
-function drawSurveyMapOverlay() {
-  if (!svMapCanvas || !lastMap || !lastSurvey) return;
-  const m = lastMap, s = lastSurvey;
-  const W = svMapCanvas.width, H = svMapCanvas.height;
-  const ctx = svMapCanvas.getContext("2d");
-  const fg = themeColor("fg"), accent = themeColor("accent") || fg;
-  const xOf = (lon) => ((lon - m.lon_lo) / (m.lon_hi - m.lon_lo)) * W; // linear in lon
-  const yHi = mercY(m.lat_hi), yLo = mercY(m.lat_lo);
-  const yOf = (lat) => ((mercY(lat) - yHi) / (yLo - yHi)) * H;
-  const tx = [xOf(s.tx.lon), yOf(s.tx.lat)];
-  const rx = [xOf(s.rx.lon), yOf(s.rx.lat)];
-  // straight TX→RX path line (fg)
-  ctx.strokeStyle = fg;
-  ctx.lineWidth = 1.4;
-  ctx.beginPath();
-  ctx.moveTo(tx[0], tx[1]);
-  ctx.lineTo(rx[0], rx[1]);
-  ctx.stroke();
-  // endpoint markers + labels (accent squares, dim labels)
-  ctx.font = "10px monospace";
-  for (const [p, label, dx] of [[tx, "TX", 6], [rx, "RX", 6]]) {
-    ctx.fillStyle = accent;
-    ctx.fillRect(p[0] - 3, p[1] - 3, 6, 6);
-    ctx.fillStyle = fg;
-    const lx = Math.min(Math.max(p[0] + dx, 2), W - 22);
-    const ly = Math.min(Math.max(p[1] - 5, 10), H - 4);
-    ctx.fillText(label, lx, ly);
-  }
-}
-
-function renderSurveyStats(s) {
-  const lb = s.link_budget || {};
-  const vcls = s.verdict === "LOS clear" ? "good" : s.verdict === "obstructed" ? "bad" : "dim";
-  const rows = [
-    statRow("verdict", s.verdict, vcls),
-    statRow("path_km", (s.path_m / 1000).toFixed(3)),
-    statRow("LOS", s.los ? "YES" : "NO", s.los ? "good" : "bad"),
-    statRow("clearance_m", Number(s.clearance_m).toFixed(1)),
-    statRow("min fresnel clearance", Number(s.min_fresnel_clearance).toFixed(3)),
-  ];
-  if (typeof s.worst_point_dist_m === "number")
-    rows.push(statRow("worst point km", (s.worst_point_dist_m / 1000).toFixed(3)));
-  rows.push(statRow("diffraction_loss_db", Number(s.diffraction_loss_db).toFixed(1)));
-  if (lb.fspl_db !== undefined) rows.push(statRow("fspl_db", Number(lb.fspl_db).toFixed(1)));
-  if (s.received_dbw !== undefined)
-    rows.push(statRow("received", `${Number(s.received_dbw).toFixed(1)} dBW (${(s.received_dbw + 30).toFixed(1)} dBm)`));
-  svStatsEl.replaceChildren(...rows);
-}
-
-async function doSurvey() {
-  const body = {
-    tx: {
-      lat: numVal("ant-v-txlat", 46.6),
-      lon: numVal("ant-v-txlon", 8.0),
-      h_m: numVal("ant-v-txh", 15),
-    },
-    rx: {
-      lat: numVal("ant-v-rxlat", 46.62),
-      lon: numVal("ant-v-rxlon", 8.02),
-      h_m: numVal("ant-v-rxh", 15),
-    },
-    f_mhz: numVal("ant-v-f", lastBand ? lastBand.f_center_mhz : 2450),
-    p_tx_dbw: numVal("ant-v-ptx", 0),
-    g_tx_dbi: numVal("ant-v-gtx", 2.15),
-    g_rx_dbi: numVal("ant-v-grx", 2.15),
-    medium: document.getElementById("ant-v-medium").value,
-    n: 200,
-  };
-  msg("surveying… (fetching SRTM terrain tiles)");
-  svStatusEl.textContent = "running…";
-  try {
-    const s = await api("/api/antenna/survey", body);
-    lastSurvey = s;
-    drawSurveyProfile();
-    renderSurveyStats(s);
-    svStatusEl.textContent = `${s.verdict} · path ${(s.path_m / 1000).toFixed(2)} km · f ${s.f_mhz} MHz`;
-    msg(`survey: ${s.verdict}`, s.verdict === "obstructed" ? "error" : "ok");
-    try {
-      lastMap = await api("/api/antenna/survey/map", { tx: body.tx, rx: body.rx, zoom: 11 });
-      drawSurveyMap();
-    } catch (e2) {
-      lastMap = null;
-      msg(`survey ok, map failed: ${e2.message}`, "error");
-    }
-  } catch (e) {
-    svStatusEl.textContent = "failed";
-    msg(`survey failed: ${e.message}`, "error");
-  }
-}
-
 // ---- tab lifecycle ------------------------------------------------------------
 
 function mediumSelect(id) {
@@ -1142,13 +980,9 @@ export function init(container) {
   );
 
   // ---- FIELDS panel
-  fXyCanvas = el("canvas", { class: "sim-canvas", width: "256", height: "256" });
-  fXzCanvas = el("canvas", { class: "sim-canvas", width: "256", height: "256" });
-  fArCanvas = el("canvas", { class: "sim-canvas", width: "256", height: "256" });
-  fArCell = labeledCell("axial ratio", fArCanvas);
-  fArCell.classList.add("hidden");
   const fChartCanvas = el("canvas", { class: "chart", width: "520", height: "170" });
   fChart = makeStripChart(fChartCanvas, null);
+  f3Cell = el("div", { class: "sim-cell" }, el("div", { class: "sim-label" }, "|E| slices (drag to orbit)"));
   panels.fields = el(
     "div",
     {},
@@ -1177,14 +1011,8 @@ export function init(container) {
     el(
       "div",
       { class: "panel" },
-      el("h2", {}, "Fields"),
-      el(
-        "div",
-        { class: "panel-row" },
-        labeledCell("|E| XY", fXyCanvas),
-        labeledCell("|E| XZ", fXzCanvas),
-        fArCell
-      )
+      el("h2", {}, "Fields (3D)"),
+      el("div", { class: "panel-row" }, f3Cell)
     ),
     el(
       "div",
@@ -1298,59 +1126,6 @@ export function init(container) {
   });
   drawSmith();
 
-  // ---- SURVEY panel
-  svProfileCanvas = el("canvas", { class: "chart", width: "640", height: "200" });
-  svMapCanvas = el("canvas", { class: "sim-canvas", width: "256", height: "256" });
-  panels.survey = el(
-    "div",
-    {},
-    el(
-      "div",
-      { class: "panel" },
-      el("h2", {}, "Site survey (SRTM terrain + LOS/Fresnel)"),
-      el("div", { class: "row" }, el("label", {}, "tx lat"), el("input", { id: "ant-v-txlat", type: "number", value: "46.6", step: "0.001" })),
-      el("div", { class: "row" }, el("label", {}, "tx lon"), el("input", { id: "ant-v-txlon", type: "number", value: "8.0", step: "0.001" })),
-      el("div", { class: "row" }, el("label", {}, "tx h m"), el("input", { id: "ant-v-txh", type: "number", value: "15", min: "0", max: "500" })),
-      el("div", { class: "row" }, el("label", {}, "rx lat"), el("input", { id: "ant-v-rxlat", type: "number", value: "46.62", step: "0.001" })),
-      el("div", { class: "row" }, el("label", {}, "rx lon"), el("input", { id: "ant-v-rxlon", type: "number", value: "8.02", step: "0.001" })),
-      el("div", { class: "row" }, el("label", {}, "rx h m"), el("input", { id: "ant-v-rxh", type: "number", value: "15", min: "0", max: "500" })),
-      el(
-        "div",
-        { class: "row" },
-        el("label", {}, "f MHz"),
-        el("input", { id: "ant-v-f", type: "number", value: "2450", step: "1" }),
-        el("span", { class: "dim" }, "follows the last design run")
-      ),
-      el("div", { class: "row" }, el("label", {}, "tx power dBW"), el("input", { id: "ant-v-ptx", type: "number", value: "0", step: "1" })),
-      el("div", { class: "row" }, el("label", {}, "g tx dBi"), el("input", { id: "ant-v-gtx", type: "number", value: "2.15", step: "0.1" })),
-      el("div", { class: "row" }, el("label", {}, "g rx dBi"), el("input", { id: "ant-v-grx", type: "number", value: "2.15", step: "0.1" })),
-      el("div", { class: "row" }, el("label", {}, "medium"), mediumSelect("ant-v-medium")),
-      el("div", { class: "btn-row" }, el("button", { class: "btn", id: "ant-v-run" }, "Survey")),
-      (svStatusEl = el("div", { class: "status-line" }, "idle")),
-      el("div", { class: "dim" }, "terrain: AWS Open Data SRTM Terrarium tiles, no key")
-    ),
-    el(
-      "div",
-      { class: "panel" },
-      el("h2", {}, "Link"),
-      el("table", { class: "stats" }, (svStatsEl = el("tbody")))
-    ),
-    el(
-      "div",
-      { class: "panel" },
-      el("h2", {}, "Terrain profile"),
-      svProfileCanvas
-    ),
-    el(
-      "div",
-      { class: "panel" },
-      el("h2", {}, "Map"),
-      el("div", { class: "panel-row" }, labeledCell("terrain map + path", svMapCanvas))
-    )
-  );
-  drawSurveyProfile();
-  drawSurveyMap();
-
   const head = el(
     "div",
     { class: "panel" },
@@ -1368,7 +1143,6 @@ export function init(container) {
   document.getElementById("ant-p-run").addEventListener("click", () => doParts(false));
   document.getElementById("ant-k-run").addEventListener("click", doKicadPanel);
   document.getElementById("ant-s-run").addEventListener("click", doSmith);
-  document.getElementById("ant-v-run").addEventListener("click", doSurvey);
   document.getElementById("ant-f-run").addEventListener("click", doFields);
   fCancelBtn.addEventListener("click", doCancelFields);
   document.getElementById("ant-e-run").addEventListener("click", doEvolve);
@@ -1378,9 +1152,9 @@ export function init(container) {
 }
 
 export function deactivate() {
-  // close both job streams; the jobs themselves keep running server-side
   if (fWs) fWs.close();
   if (eWs) eWs.close();
   fWs = eWs = null;
+  disposeFieldsThree();
   window.removeEventListener("themechange", onThemechange);
 }

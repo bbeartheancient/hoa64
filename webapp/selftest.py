@@ -831,6 +831,7 @@ def selftest() -> int:
            "matrix_lab in-place 2D→3D transmute morph")
     r = client.get("/js/tabs/search_studio.js")
     expect("run-viz" in r.text, "search_studio unified run panel")
+    expect("export function deactivate" in r.text, "search_studio closes the job socket")
     r = client.get("/js/tabs/micromag_sim.js")
     expect("sim-layer-select" in r.text and "data-layer" in r.text,
            "micromag layer select")
@@ -849,6 +850,18 @@ def selftest() -> int:
     expect("ter-views" in r.text, "terrain equal-size viewport row")
     expect("setSize(w, h, false)" in r.text and '"Layers"' in r.text,
            "terrain CSS-owned canvas size + sidebar layer controls")
+    expect("ter-survey-body" in r.text and "ter-mode-select" in r.text
+           and "closeSurveyPopup" not in r.text,
+           "terrain GENERATE/SURVEY sidebar toggle (popup leftover gone)")
+    expect("drawPathProfile" in r.text and "buildSurveyScene" in r.text
+           and "elevToY" in r.text,
+           "terrain survey path-profile + metric 3-D link")
+    expect("rawNum" in r.text and "RX blank" in r.text
+           and "imagery_png_b64" in r.text and "sampleHm" in r.text
+           and "PATH PROFILE" in r.text
+           and "new THREE.Texture" in r.text
+           and "ter-s-back" not in r.text and 'id: "ter-survey"' not in r.text,
+           "terrain survey: blank RX, Texture imagery, mesh-sampled link")
     r = client.get("/css/app.css")
     expect(".ter-views > .panel" in r.text and ".ter-views canvas" in r.text,
            "app.css ter-views flex + 1:1 canvas rules")

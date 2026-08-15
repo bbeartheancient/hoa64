@@ -176,8 +176,8 @@ if __name__ == "__main__":
                "polarization": "circular", "partial": True})
     assert len(g) >= 1 and any(x["polarization"] == "RHCP" for x in g), g
 
-    # 10 GHz: no catalog parts — empty list, not an error.
-    assert match({"f_lo_hz": 10e9, "f_hi_hz": 10.5e9}) == []
+    # wideband mmWave: no catalog parts — empty list, not an error.
+    assert match({"f_lo_hz": 28e9, "f_hi_hz": 29e9}) == []
 
     print(f"parts_db self-check OK: {len(parts)} rows, "
           f"{len(r)} parts cover 2400–2485 MHz @ gain ≥ 0 dBi, "

@@ -91,16 +91,25 @@ import urllib.request
 import numpy as np
 
 from .em_physics import link_budget, medium_params
-from .webapp._png import decode_png
+from .webapp._png import decode_png, write_png
 
 TILE_URL = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
 TILE_PX = 256
 EARTH_R_M = 6_371_000.0          # mean earth radius
 K_EARTH = 4.0 / 3.0              # effective-earth-radius factor
 MAX_PATH_M = 200_000.0           # beyond this the tile count explodes
+MIN_PATH_M = 50.0                # coincident TX/RX → 1 km east hop
 MAX_LAT = 85.05112878            # Web-Mercator latitude limit
 FRESNEL_CLEAR_FRAC = 0.6         # ≥60 % of r1 clear ≈ free-space loss
 V_THRESHOLD = -0.78              # knife-edge contributes only above this
+RADIO_HORIZON_K = 4.12           # km / √(h_m) — 4/3-earth geometric horizon
+IMAGERY_URLS = (
+    "https://server.arcgisonline.com/ArcGIS/rest/services/"
+    "World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    "https://services.arcgisonline.com/ArcGIS/rest/services/"
+    "World_Imagery/MapServer/tile/{z}/{y}/{x}",
+)
+_TILE_UA = {"User-Agent": "hoa64-lab/0.5 (site survey)"}
 
 
 # ------------------------------------------------------------ tiles
@@ -134,7 +143,8 @@ def fetch_tile(z: int, x: int, y: int, cache_dir: str | None = None) -> np.ndarr
         with open(path, "rb") as f:
             return decode_png(f.read())
     url = TILE_URL.format(z=z, x=x, y=y)
-    with urllib.request.urlopen(url, timeout=10) as resp:
+    req = urllib.request.Request(url, headers=_TILE_UA)
+    with urllib.request.urlopen(req, timeout=10) as resp:
         data = resp.read()
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "wb") as f:
@@ -176,6 +186,29 @@ def elevation(lat: float, lon: float, zoom: int = 12) -> float:
 
 
 # ------------------------------------------------------------ profiles
+
+def _radio_horizon_m(h_tx: float, h_rx: float) -> float:
+    """Geometric radio horizon (m) on a 4/3-earth: 4.12 km · (√h_tx + √h_rx)."""
+    return 1000.0 * RADIO_HORIZON_K * (
+        math.sqrt(max(float(h_tx), 0.0)) + math.sqrt(max(float(h_rx), 0.0))
+    )
+
+
+def _offset_east(lat: float, lon: float, dist_m: float = 1000.0) -> tuple[float, float]:
+    """Displace (lat, lon) due east by dist_m. Used for coincident TX/RX."""
+    return _offset_bearing(lat, lon, dist_m, 90.0)
+
+
+def _offset_bearing(lat: float, lon: float, dist_m: float,
+                    bearing_deg: float) -> tuple[float, float]:
+    """Displace (lat, lon) by dist_m along a compass bearing (0° = N, 90° = E)."""
+    br = math.radians(bearing_deg)
+    dlat = (dist_m * math.cos(br)) / 111_320.0
+    dlon = (dist_m * math.sin(br)) / (
+        111_320.0 * max(0.2, math.cos(math.radians(lat)))
+    )
+    return float(lat) + dlat, float(lon) + dlon
+
 
 def _haversine_m(lat0: float, lon0: float, lat1: float, lon1: float) -> float:
     p0, p1 = math.radians(lat0), math.radians(lat1)
@@ -328,6 +361,20 @@ def _analyze(dist_m: np.ndarray, elev_m: np.ndarray,
     else:
         verdict = "LOS clear"
 
+    # extra mast height to restore 0.6·r₁ clearance at every interior point
+    need = FRESNEL_CLEAR_FRAC * r1
+    deficit = need - clearance
+    t = d / D
+    dh_tx = 0.0
+    dh_rx = 0.0
+    for i in range(1, n - 1):
+        if deficit[i] <= 0:
+            continue
+        if (1.0 - t[i]) > 0.05:
+            dh_tx = max(dh_tx, float(deficit[i] / (1.0 - t[i])))
+        if t[i] > 0.05:
+            dh_rx = max(dh_rx, float(deficit[i] / t[i]))
+
     return {
         "los": bool(los),
         "verdict": verdict,
@@ -343,6 +390,10 @@ def _analyze(dist_m: np.ndarray, elev_m: np.ndarray,
         "bulge_m": [float(v) for v in bulge],
         "los_line_m": [float(v) for v in line],
         "fresnel_r1_m": [float(v) for v in r1],
+        "suggest_tx_h_m": float(tx_h + dh_tx),
+        "suggest_rx_h_m": float(rx_h + dh_rx),
+        "radio_horizon_m": _radio_horizon_m(tx_h, rx_h),
+        "tx_horizon_m": _radio_horizon_m(tx_h, 0.0),
     }
 
 
@@ -361,16 +412,55 @@ def survey(tx: dict, rx: dict, f_mhz: float, p_tx_dbw: float = 0.0,
     "obstructed").
     """
     f_hz = f_mhz * 1e6
-    prof = path_profile(tx["lat"], tx["lon"], rx["lat"], rx["lon"], n, zoom)
-    geom = _analyze(prof["dist_m"], prof["elev_m"],
-                    float(tx["h_m"]), float(rx["h_m"]), f_hz, medium)
+    tx = {"lat": float(tx["lat"]), "lon": float(tx["lon"]),
+          "h_m": float(tx.get("h_m", 15.0))}
+    rx = {"lat": float(rx["lat"]), "lon": float(rx["lon"]),
+          "h_m": float(rx.get("h_m", tx["h_m"]))}
+    hop = _haversine_m(tx["lat"], tx["lon"], rx["lat"], rx["lon"])
+    offset_m = 0.0
+    site_only = hop < MIN_PATH_M
+    bearing_deg = None
+    if site_only:
+        # Don't fire a 1 km due-east hop into the nearest hillside and
+        # call the site "obstructed".  Probe 8 short (400 m) bearings and
+        # keep the clearest — that's the local placement suggestion.
+        hop_m = 400.0
+        best = None
+        for az in range(0, 360, 45):
+            rlat, rlon = _offset_bearing(tx["lat"], tx["lon"], hop_m, az)
+            prof = path_profile(tx["lat"], tx["lon"], rlat, rlon, max(32, n // 4), zoom)
+            try:
+                geom = _analyze(prof["dist_m"], prof["elev_m"],
+                                tx["h_m"], rx["h_m"], f_hz, medium)
+            except ValueError:
+                continue
+            if best is None or geom["clearance_m"] > best[0]["clearance_m"]:
+                best = (geom, rlat, rlon, az, hop_m)
+        if best is None:
+            rlat, rlon = _offset_bearing(tx["lat"], tx["lon"], hop_m, 90.0)
+            rx = {"lat": rlat, "lon": rlon, "h_m": rx["h_m"]}
+            offset_m = hop_m
+            bearing_deg = 90.0
+            prof = path_profile(tx["lat"], tx["lon"], rx["lat"], rx["lon"], n, zoom)
+            geom = _analyze(prof["dist_m"], prof["elev_m"],
+                            tx["h_m"], rx["h_m"], f_hz, medium)
+        else:
+            geom, rlat, rlon, az, hop_m = best
+            rx = {"lat": rlat, "lon": rlon, "h_m": rx["h_m"]}
+            offset_m = hop_m
+            bearing_deg = float(az)
+    else:
+        prof = path_profile(tx["lat"], tx["lon"], rx["lat"], rx["lon"], n, zoom)
+        geom = _analyze(prof["dist_m"], prof["elev_m"],
+                        tx["h_m"], rx["h_m"], f_hz, medium)
     lb = link_budget(p_tx_dbw, g_tx_dbi, g_rx_dbi, geom["path_m"], f_hz, medium)
     received = lb["received_dbw"] - geom["diffraction_loss_db"]
     return {
-        "tx": {"lat": float(tx["lat"]), "lon": float(tx["lon"]),
-               "h_m": float(tx["h_m"])},
-        "rx": {"lat": float(rx["lat"]), "lon": float(rx["lon"]),
-               "h_m": float(rx["h_m"])},
+        "tx": tx,
+        "rx": rx,
+        "rx_offset_m": offset_m,
+        "site_only": site_only,
+        "bearing_deg": bearing_deg,
         "f_mhz": float(f_mhz),
         "medium": medium,
         "zoom": int(zoom),
@@ -382,30 +472,43 @@ def survey(tx: dict, rx: dict, f_mhz: float, p_tx_dbw: float = 0.0,
 
 
 def terrain_map(lat0: float, lon0: float, lat1: float, lon1: float,
-                zoom: int = 11, size: int = 256,
+                zoom: int = 12, size: int = 64,
                 cache_dir: str | None = None) -> dict:
-    """Elevation mosaic covering both points → {"elev", bbox, zoom}.
+    """Local DEM patch around the two sites → {"elev", bbox, zoom, span_m}.
 
-    Fetches the Terrarium tiles spanning (lat0, lon0)–(lat1, lon1) at
-    `zoom`, stepping the zoom down until the mosaic fits in ≤ 4×4 tiles
-    (16 requests worst case), decodes every pixel with the Terrarium
-    formula, and resamples (nearest) to `size`×`size`.  The returned
-    bbox is the exact tile-range footprint in lat/lon so callers can map
-    geographic coordinates to array indices linearly in lon and via the
-    mercator inverse in lat (approximately linear over these small spans
-    — documented simplification).
+    Older versions returned a whole slippy-tile mosaic (often 10+ km on
+    a side for a 1 km hop) and the UI min-max stretched it, so a flat
+    field looked alpine.  This crops a *tight* geographic window — the
+    axis-aligned bbox of the two points, padded by 15 % of the path
+    (floor 200 m).  Tiles covering that window are fetched once and
+    bilinearly resampled; row 0 is north.  `span_m` is the window's
+    longer side — the 3-D view uses it as the metric horizontal scale.
     """
+    path = _haversine_m(lat0, lon0, lat1, lon1)
+    span = max(path, 400.0)
+    pad = max(200.0, 0.15 * span)
+    half = span / 2.0 + pad
+    lat_c = 0.5 * (lat0 + lat1)
+    lon_c = 0.5 * (lon0 + lon1)
+    m_per_lat = 111_320.0
+    m_per_lon = 111_320.0 * max(0.2, math.cos(math.radians(lat_c)))
+    dlat = half / m_per_lat
+    dlon = half / m_per_lon
+    lat_lo, lat_hi = lat_c - dlat, lat_c + dlat
+    lon_lo, lon_hi = lon_c - dlon, lon_c + dlon
     z = zoom
-    while True:
-        x0, y0, _, _ = _tile_pixel(lat0, lon0, z)
-        x1, y1, _, _ = _tile_pixel(lat1, lon1, z)
-        xa, xb = min(x0, x1), max(x0, x1)
-        ya, yb = min(y0, y1), max(y0, y1)
-        if xb - xa + 1 <= 4 and yb - ya + 1 <= 4:
-            break
-        z -= 1
-        if z < 3:
-            raise ValueError("points too far apart for a map (need > 4×4 tiles at z=3)")
+    if half > 20_000:
+        z = min(z, 10)
+    if half > 50_000:
+        z = min(z, 8)
+    if half > 100_000:
+        z = min(z, 6)
+    size = int(max(16, min(128, size)))
+
+    x0, y0, _, _ = _tile_pixel(lat_hi, lon_lo, z)  # NW
+    x1, y1, _, _ = _tile_pixel(lat_lo, lon_hi, z)  # SE
+    xa, xb = min(x0, x1), max(x0, x1)
+    ya, yb = min(y0, y1), max(y0, y1)
     rows, cols = (yb - ya + 1) * TILE_PX, (xb - xa + 1) * TILE_PX
     mosaic = np.empty((rows, cols), dtype=np.float64)
     for ty in range(ya, yb + 1):
@@ -414,24 +517,131 @@ def terrain_map(lat0: float, lon0: float, lat1: float, lon1: float,
             e = t[:, :, 0] * 256.0 + t[:, :, 1] + t[:, :, 2] / 256.0 - 32768.0
             mosaic[(ty - ya) * TILE_PX:(ty - ya + 1) * TILE_PX,
                    (tx_ - xa) * TILE_PX:(tx_ - xa + 1) * TILE_PX] = e
-    iy = np.linspace(0, rows - 1, size).astype(int)
-    ix = np.linspace(0, cols - 1, size).astype(int)
-    elev = mosaic[np.ix_(iy, ix)]
+
+    # fractional mosaic coordinates of each output sample
     n = 1 << z
-    lon_lo = xa / n * 360.0 - 180.0
-    lon_hi = (xb + 1) / n * 360.0 - 180.0
+    # global pixel of (lon, lat): same convention as _tile_pixel
+    def _gpix(lat: float, lon: float) -> tuple[float, float]:
+        lat = max(-MAX_LAT, min(MAX_LAT, lat))
+        px = (lon + 180.0) / 360.0 * n * TILE_PX
+        phi = math.radians(lat)
+        py = (1.0 - math.asinh(math.tan(phi)) / math.pi) / 2.0 * n * TILE_PX
+        return px - xa * TILE_PX, py - ya * TILE_PX
 
-    def _lat_of(ty: float) -> float:  # mercator inverse for tile row edge
-        return math.degrees(math.atan(math.sinh(math.pi * (1.0 - 2.0 * ty / n))))
-
+    lats = np.linspace(lat_hi, lat_lo, size)
+    lons = np.linspace(lon_lo, lon_hi, size)
+    elev = np.empty((size, size), dtype=np.float64)
+    for i, lat in enumerate(lats):
+        for j, lon in enumerate(lons):
+            fx, fy = _gpix(float(lat), float(lon))
+            # bilinear in the mosaic (pixel centres at i+0.5)
+            u, v = fx - 0.5, fy - 0.5
+            i0 = int(math.floor(u)); j0 = int(math.floor(v))
+            txw, tyw = u - i0, v - j0
+            i0 = max(0, min(cols - 1, i0)); j0 = max(0, min(rows - 1, j0))
+            i1 = min(cols - 1, i0 + 1); j1 = min(rows - 1, j0 + 1)
+            elev[i, j] = ((1 - txw) * (1 - tyw) * mosaic[j0, i0]
+                          + txw * (1 - tyw) * mosaic[j0, i1]
+                          + (1 - txw) * tyw * mosaic[j1, i0]
+                          + txw * tyw * mosaic[j1, i1])
+    ji = int(np.argmax(elev))
+    bi, bj = divmod(ji, size)
     return {
         "elev": elev,
-        "lat_lo": _lat_of(yb + 1),
-        "lat_hi": _lat_of(ya),
-        "lon_lo": lon_lo,
-        "lon_hi": lon_hi,
-        "zoom": z,
+        "lat_lo": float(lat_lo),
+        "lat_hi": float(lat_hi),
+        "lon_lo": float(lon_lo),
+        "lon_hi": float(lon_hi),
+        "zoom": int(z),
+        "span_m": float(2.0 * half),
+        "best_site": {
+            "lat": float(lats[bi]),
+            "lon": float(lons[bj]),
+            "elev_m": float(elev[bi, bj]),
+            "delta_m": float(elev[bi, bj] - elev[size // 2, size // 2]),
+        },
     }
+
+
+def _fetch_imagery_tile(z: int, x: int, y: int, cache_dir: str | None = None) -> np.ndarray:
+    """Esri World Imagery slippy tile → (256, 256, 3) uint8. Cached."""
+    if cache_dir is None:
+        cache_dir = os.path.expanduser("~/.cache/hoa64/imagery")
+    path = os.path.join(cache_dir, str(z), str(x), f"{y}.png")
+    if os.path.exists(path):
+        with open(path, "rb") as f:
+            blob = f.read()
+        if blob[:8] == b"\x89PNG\r\n\x1a\n":
+            return decode_png(blob)[:, :, :3]
+        # leftover JPEG from an earlier cache write — fall through and rewrite
+    data = None
+    last_err = None
+    for tmpl in IMAGERY_URLS:
+        url = tmpl.format(z=z, x=x, y=y)
+        req = urllib.request.Request(url, headers=_TILE_UA)
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = resp.read()
+            break
+        except Exception as exc:  # noqa: BLE001
+            last_err = exc
+    if data is None:
+        raise RuntimeError(f"imagery tile z={z} x={x} y={y}: {last_err}")
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        rgb = decode_png(data)[:, :, :3]
+    else:
+        # Esri World Imagery serves JPEG
+        from io import BytesIO
+        from PIL import Image
+        rgb = np.asarray(Image.open(BytesIO(data)).convert("RGB"))
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as f:
+        f.write(write_png(rgb))
+    return rgb
+
+
+def imagery_map(lat_lo: float, lat_hi: float, lon_lo: float, lon_hi: float,
+                zoom: int = 15, size: int = 256,
+                cache_dir: str | None = None) -> np.ndarray:
+    """Full-colour satellite mosaic of a lat/lon window → (size, size, 3) uint8.
+
+    Same slippy-map convention as `terrain_map` (row 0 = north).  Zoom is
+    independent of the DEM zoom — imagery is fetched at a higher z so
+    the 3-D texture has visible detail on a 1 km field.
+    """
+    z = int(max(3, min(17, zoom)))
+    x0, y0, _, _ = _tile_pixel(lat_hi, lon_lo, z)
+    x1, y1, _, _ = _tile_pixel(lat_lo, lon_hi, z)
+    xa, xb = min(x0, x1), max(x0, x1)
+    ya, yb = min(y0, y1), max(y0, y1)
+    # cap tile count so a long hop doesn't pull 100 images
+    while (xb - xa + 1) * (yb - ya + 1) > 16 and z > 3:
+        z -= 1
+        x0, y0, _, _ = _tile_pixel(lat_hi, lon_lo, z)
+        x1, y1, _, _ = _tile_pixel(lat_lo, lon_hi, z)
+        xa, xb = min(x0, x1), max(x0, x1)
+        ya, yb = min(y0, y1), max(y0, y1)
+    rows, cols = (yb - ya + 1) * TILE_PX, (xb - xa + 1) * TILE_PX
+    mosaic = np.empty((rows, cols, 3), dtype=np.uint8)
+    for ty in range(ya, yb + 1):
+        for tx_ in range(xa, xb + 1):
+            t = _fetch_imagery_tile(z, tx_, ty, cache_dir)
+            mosaic[(ty - ya) * TILE_PX:(ty - ya + 1) * TILE_PX,
+                   (tx_ - xa) * TILE_PX:(tx_ - xa + 1) * TILE_PX] = t
+    n = 1 << z
+    size = int(max(16, min(512, size)))
+    rgb = np.empty((size, size, 3), dtype=np.uint8)
+    for i, lat in enumerate(np.linspace(lat_hi, lat_lo, size)):
+        for j, lon in enumerate(np.linspace(lon_lo, lon_hi, size)):
+            lat = max(-MAX_LAT, min(MAX_LAT, float(lat)))
+            px = (float(lon) + 180.0) / 360.0 * n * TILE_PX - xa * TILE_PX
+            phi = math.radians(lat)
+            py = ((1.0 - math.asinh(math.tan(phi)) / math.pi) / 2.0
+                  * n * TILE_PX - ya * TILE_PX)
+            ii = max(0, min(cols - 1, int(round(px))))
+            jj = max(0, min(rows - 1, int(round(py))))
+            rgb[i, j] = mosaic[jj, ii]
+    return rgb
 
 
 # ------------------------------------------------------------ self-check
@@ -441,6 +651,13 @@ if __name__ == "__main__":
 
     F = 2.45e9
     lam = _mp(F)["wavelength"]
+
+    # (a0) helpers — no network
+    assert abs(_radio_horizon_m(15.0, 15.0) - 2 * 4120.0 * math.sqrt(15.0)) < 1.0
+    elat, elon = _offset_east(52.445472, -2.597833, 1000.0)
+    assert abs(_haversine_m(52.445472, -2.597833, elat, elon) - 1000.0) < 15.0
+    print(f"(a0) horizon 15+15 m = {_radio_horizon_m(15, 15)/1000:.2f} km; "
+          f"1 km east hop ok")
 
     # (a) flat 5 km path, 10 m masts → clear LOS, no diffraction
     npts = 200

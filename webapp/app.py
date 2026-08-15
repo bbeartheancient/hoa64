@@ -64,6 +64,17 @@ def create_app() -> FastAPI:
     def api_catch_all(path: str) -> None:
         raise HTTPException(status_code=404, detail=f"no such API endpoint: /api/{path}")
 
+    # Lab tool: always revalidate HTML/JS/CSS so a tab refresh picks up
+    # edits. Without this, browsers keep stale ES modules and the UI
+    # silently shows yesterday's pages after a code change.
+    @app.middleware("http")
+    async def nocache_frontend(request, call_next):
+        response = await call_next(request)
+        path = request.url.path
+        if path == "/" or path.endswith((".html", ".js", ".css")):
+            response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return response
+
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
     return app
 

@@ -37,7 +37,7 @@ from pydantic import BaseModel
 
 from .. import antenna_design, antenna_evo, fdtd, kicad_gen, parts_db, site_survey
 from ..em_physics import MEDIA, build_dipole as em_build_dipole
-from ._png import heatmap_png
+from ._png import heatmap_png, write_png
 from .jobs import JOBS, Job, report
 from .routes_hadamard import _jsafe
 from .routes_search import _BudgetStop
@@ -539,7 +539,7 @@ class SurveyPoint(BaseModel):
 
 class SurveyReq(BaseModel):
     tx: SurveyPoint
-    rx: SurveyPoint
+    rx: SurveyPoint | None = None  # omitted / coincident → 1 km east hop
     f_mhz: float
     p_tx_dbw: float = 0.0
     g_tx_dbi: float = 2.15
@@ -566,7 +566,8 @@ def survey(req: SurveyReq) -> dict:
     `em_physics.link_budget`.
     """
     _check_site(req.tx)
-    _check_site(req.rx)
+    rx = req.rx or req.tx
+    _check_site(rx)
     if not (F_MIN_MHZ <= req.f_mhz <= F_MAX_MHZ):
         raise HTTPException(status_code=400, detail=f"f_mhz must be {F_MIN_MHZ:g}..{F_MAX_MHZ:g}")
     _check_medium(req.medium)
@@ -576,7 +577,7 @@ def survey(req: SurveyReq) -> dict:
         raise HTTPException(status_code=400, detail="zoom must be 3..15")
     try:
         out = site_survey.survey(
-            req.tx.model_dump(), req.rx.model_dump(), req.f_mhz,
+            req.tx.model_dump(), rx.model_dump(), req.f_mhz,
             p_tx_dbw=req.p_tx_dbw, g_tx_dbi=req.g_tx_dbi, g_rx_dbi=req.g_rx_dbi,
             medium=req.medium, n=req.n, zoom=req.zoom,
         )
@@ -589,9 +590,11 @@ def survey(req: SurveyReq) -> dict:
 
 class SurveyMapReq(BaseModel):
     tx: SurveyPoint
-    rx: SurveyPoint
+    rx: SurveyPoint | None = None
     zoom: int = 11
     size: int = 256
+    heightmap: bool = False
+    imagery: bool = False
 
 
 @router.post("/survey/map")
@@ -599,17 +602,19 @@ def survey_map(req: SurveyMapReq) -> dict:
     """Terrain heatmap covering both sites (Terrarium tiles → PNG b64).
 
     Returns the geographic bbox so the frontend can draw the path/markers
-    in canvas coordinates.
+    in canvas coordinates. When heightmap=True, also returns the raw 2-D
+    elevation grid for the terrain 3-D view.
     """
     _check_site(req.tx)
-    _check_site(req.rx)
+    rx = req.rx or req.tx
+    _check_site(rx)
     if not (3 <= req.zoom <= 15):
         raise HTTPException(status_code=400, detail="zoom must be 3..15")
     if not (64 <= req.size <= 1024):
         raise HTTPException(status_code=400, detail="size must be 64..1024")
     try:
         out = site_survey.terrain_map(
-            req.tx.lat, req.tx.lon, req.rx.lat, req.rx.lon,
+            req.tx.lat, req.tx.lon, rx.lat, rx.lon,
             zoom=req.zoom, size=req.size,
         )
     except ValueError as e:
@@ -618,10 +623,30 @@ def survey_map(req: SurveyMapReq) -> dict:
         raise HTTPException(status_code=502, detail=f"terrain fetch failed: {e}")
     elev = np.asarray(out.pop("elev"), dtype=np.float64)
     lo, hi = float(np.min(elev)), float(np.max(elev))
-    norm = (elev - lo) / (hi - lo) if hi > lo else np.zeros_like(elev)
-    return _jsafe({
+    # colour the PNG by metres, but do NOT min-max a huge tile — the
+    # window is already a tight path neighbourhood.  A flat field stays
+    # nearly uniform (a 5 m ripple over 2 km is ~invisible, correctly).
+    # 30 m of relief fills the ramp; bigger relief saturates, smaller
+    # relief stays quiet.  This is a *display* stretch, not the 3-D scale.
+    colour_span = max(30.0, hi - lo)
+    norm = np.clip((elev - lo) / colour_span, 0.0, 1.0)
+    resp = {
         **out,
         "elev_lo_m": lo,
         "elev_hi_m": hi,
+        "relief_m": hi - lo,
         "map_png_b64": base64.b64encode(heatmap_png(norm, 512)).decode("ascii"),
-    })
+    }
+    if req.heightmap:
+        resp["heightmap"] = [[float(v) for v in row] for row in elev.tolist()]
+    if req.imagery:
+        try:
+            rgb = site_survey.imagery_map(
+                resp["lat_lo"], resp["lat_hi"], resp["lon_lo"], resp["lon_hi"],
+                zoom=min(16, req.zoom + 3), size=min(256, max(req.size, 128)),
+            )
+            resp["imagery_png_b64"] = base64.b64encode(write_png(rgb)).decode("ascii")
+        except Exception as exc:
+            resp["imagery_png_b64"] = None
+            resp["imagery_error"] = str(exc)[:240]
+    return _jsafe(resp)

@@ -14,29 +14,32 @@
 <link rel="stylesheet" href="/css/app.css">
 </head>
 <body>
-<div id="app">
-<header class="topbar">
-  <span class="logo">hoa64</span>
-  <span class="subtitle">— hadamard lab</span>
-  <span class="hud-accent">未来 0001/8129_SYS</span>
-  <span class="spacer"></span>
-  <button class="ts-btn" id="settings-btn" title="Display settings">[SET]</button>
-</header>
-<aside id="settings-panel" aria-label="Display settings"></aside>
-<nav class="tabs" id="tabs">
-  <button class="tab active" data-tab="matrix_lab">Matrix Lab</button>
-  <button class="tab" data-tab="search_studio">Search Studio</button>
-  <button class="tab" data-tab="micromag_sim">Micromag Sim</button>
-  <button class="tab" data-tab="hoa_studio">HOA Studio</button>
-  <button class="tab" data-tab="terrain">Terrain</button>
-  <button class="tab" data-tab="orbitals">Orbitals</button>
-  <button class="tab" data-tab="library">Library</button>
-  <button class="tab" data-tab="antenna">ANTENNA</button>
-  <button class="tab" data-tab="noise">NOISE</button>
-</nav>
-<main id="tab-content"></main>
-<div class="crt-fx"></div>
-</div>
-<script type="module" src="/js/main.js"></script>
+  <div id="app">
+  <header class="topbar">
+    <span class="logo">hoa64</span>
+    <span class="subtitle">— hadamard lab</span>
+    <span class="hud-accent">未来 0001/8129_SYS</span>
+    <span class="spacer"></span>
+    <button class="ts-btn" id="settings-btn" title="Display settings">[SET]</button>
+  </header>
+  <nav class="tabs" id="tabs">
+    <button class="tab active" data-tab="matrix_lab">Matrix Lab</button>
+    <button class="tab" data-tab="search_studio">Search Studio</button>
+    <button class="tab" data-tab="micromag_sim">Micromag Sim</button>
+    <button class="tab" data-tab="hoa_studio">HOA Studio</button>
+    <button class="tab" data-tab="terrain">Terrain</button>
+    <button class="tab" data-tab="orbitals">Orbitals</button>
+    <button class="tab" data-tab="library">Library</button>
+    <button class="tab" data-tab="antenna">ANTENNA</button>
+    <button class="tab" data-tab="noise">NOISE</button>
+  </nav>
+  <main id="tab-content"></main>
+  <div class="crt-fx"></div>
+  </div>
+  <div id="settings-overlay">
+    <div id="settings-backdrop"></div>
+    <aside id="settings-panel" aria-label="Display settings"></aside>
+  </div>
+  <script type="module" src="/js/main.js"></script>
 </body>
 </html>

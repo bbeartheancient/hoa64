@@ -124,6 +124,8 @@ function el(tag, attrs = {}, ...kids) {
 }
 
 const panel = document.getElementById("settings-panel");
+const overlay = document.getElementById("settings-overlay");
+const backdrop = document.getElementById("settings-backdrop");
 
 // Every control input carries data-setting + a _refresh() that re-reads the
 // setting; one settingschange listener refreshes whatever is in the DOM, so
@@ -275,9 +277,9 @@ if (panel) {
 // ---- global display filter ------------------------------------------------
 // brightness/contrast/saturation (+ bivert inversion on themes that expose
 // the toggle) apply to the ENTIRE screen through one CSS filter on #app —
-// canvases, text chrome, overlays alike, exactly once. #app wraps the whole
-// UI incl. .crt-fx and this panel because filter creates a containing block
-// for fixed-position descendants.
+// canvases and text chrome alike, exactly once. .crt-fx stays inside #app
+// (filter creates a containing block for it); the settings overlay lives
+// outside #app so it stays viewport-fixed and unfiltered.
 
 function applyGlobalFilter() {
   const app = document.getElementById("app");
@@ -302,20 +304,20 @@ function applyGlobalFilter() {
 
 // ---- wiring ---------------------------------------------------------------
 
+function openSettings() { if (overlay) overlay.classList.add("open"); }
+function closeSettings() { if (overlay) overlay.classList.remove("open"); }
+
 const settingsBtn = document.getElementById("settings-btn");
-if (settingsBtn && panel) {
-  // [SET] toggles; [X], click-outside and Esc all dismiss
-  settingsBtn.addEventListener("click", () => panel.classList.toggle("open"));
-  closeBtn.addEventListener("click", () => panel.classList.remove("open"));
-  document.addEventListener("click", (e) => {
-    if (!panel.classList.contains("open")) return;
-    const t = e.target;
-    if (t && t.closest && t.closest("#settings-panel, #settings-btn")) return;
-    panel.classList.remove("open");
+if (settingsBtn && overlay) {
+  settingsBtn.addEventListener("click", () => {
+    overlay.classList.toggle("open");
   });
+  closeBtn.addEventListener("click", closeSettings);
+  backdrop.addEventListener("click", closeSettings);
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") panel.classList.remove("open");
+    if (e.key === "Escape") closeSettings();
   });
+  // click on the panel itself does not close (backdrop behind it does)
 }
 
 window.addEventListener("themechange", () => {

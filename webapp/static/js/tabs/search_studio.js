@@ -12,7 +12,7 @@ import { retintCanvas } from "/js/theme.js";
 const ENGINES = ["maxdet", "micromag", "tile", "williamson", "gs", "circulant"];
 
 let msgEl, statusEl, statsEl, previewCanvas, previewCtx;
-let energyChart, tempChart, tunePanel, cancelBtn, exportBtn;
+let waveChart, tunePanel, cancelBtn, exportBtn;
 let ws = null;
 let currentJob = null;
 
@@ -69,8 +69,7 @@ function drawPng(b64) {
 }
 
 function resetRun() {
-  energyChart.clear();
-  tempChart.clear();
+  waveChart.clear();
   statsEl.replaceChildren();
   statusEl.textContent = "connecting…";
   exportBtn.style.display = "none";
@@ -89,10 +88,9 @@ function handleFrame(d) {
     }
     const energy = d.E ?? d.f;
     const best = d.best_E ?? d.best_f;
-    if (energy !== undefined || best !== undefined) {
-      energyChart.push({ E: energy, best });
+    if (energy !== undefined || best !== undefined || d.T !== undefined) {
+      waveChart.push({ E: energy, BEST: best, T: d.T });
     }
-    if (d.T !== undefined) tempChart.push({ T: d.T });
     const bits = [];
     if (d.iter !== undefined) bits.push(`iter ${d.iter}`);
     if (d.step !== undefined) bits.push(`step ${d.step}`);
@@ -254,17 +252,40 @@ export function init(container) {
     slider("tune-lam-ani", "lam_ani", "0", "1", "0.01", "0")
   );
 
-  const energyCanvas = el("canvas", { class: "chart", width: "520", height: "160" });
-  const tempCanvas = el("canvas", { class: "chart", width: "520", height: "120" });
-  energyChart = makeStripChart(energyCanvas, { E: "#22c55e", best: "#eab308" });
-  tempChart = makeStripChart(tempCanvas, { T: "#38bdf8" });
+  const waveCanvas = el("canvas", { class: "chart", width: "520", height: "170" });
+  waveChart = makeStripChart(waveCanvas, null); // theme-derived colors
 
-  previewCanvas = el("canvas", { id: "matrix-canvas", width: "512", height: "512" });
+  previewCanvas = el("canvas", { class: "sim-canvas", width: "256", height: "256" });
   previewCtx = previewCanvas.getContext("2d");
+  const previewCell = el(
+    "div",
+    { class: "sim-cell" },
+    el("div", { class: "sim-label" }, "matrix (best)"),
+    previewCanvas
+  );
 
-  // ONE run panel (Item 3): status line on top, then matrix preview left
-  // and strip charts right inside a single bordered HUD panel (flex-wrap —
-  // stacks on narrow windows). Launch form/tune stay separate.
+  // ONE strip chart (same convention as Micromag): E / BEST / T with
+  // per-series toggles. Default E+T on; BEST is one click away.
+  const WAVE_SERIES = ["E", "BEST", "T"];
+  const WAVE_DEFAULT_ON = new Set(["E", "T"]);
+  for (const n of WAVE_SERIES) waveChart.setVisible(n, WAVE_DEFAULT_ON.has(n));
+  const waveRow = el(
+    "div",
+    { class: "btn-row layer-select" },
+    ...WAVE_SERIES.map((name) => {
+      const b = el("button", { class: "btn", "data-series": name }, `[${name.toUpperCase()}]`);
+      b.addEventListener("click", () => {
+        const on = !waveChart.isVisible(name);
+        waveChart.setVisible(name, on);
+        b.style.opacity = on ? "1" : "0.45";
+      });
+      b.style.opacity = WAVE_DEFAULT_ON.has(name) ? "1" : "0.45";
+      return b;
+    })
+  );
+
+  // ONE run panel: status on top, then matrix left + waveforms right
+  // inside .run-viz (flex-wrap stacks on narrow windows).
   const runPanel = el(
     "div",
     { class: "panel" },
@@ -274,15 +295,8 @@ export function init(container) {
     el(
       "div",
       { class: "run-viz" },
-      el("div", { class: "canvas-wrap" }, previewCanvas),
-      el(
-        "div",
-        { class: "run-charts" },
-        el("h2", {}, "Energy / best"),
-        energyCanvas,
-        el("h2", { style: "margin-top:12px" }, "Temperature"),
-        tempCanvas
-      )
+      previewCell,
+      el("div", { class: "run-charts" }, waveRow, waveCanvas)
     )
   );
 
@@ -298,6 +312,12 @@ export function init(container) {
   document.getElementById("ss-launch").addEventListener("click", doLaunch);
   cancelBtn.addEventListener("click", doCancel);
   exportBtn.addEventListener("click", doExport);
+}
+
+export function deactivate() {
+  // close the job stream; the job itself keeps running server-side
+  if (ws) ws.close();
+  ws = null;
 }
 
 // cross-tab deep link from the Library tab: pre-fill the search order

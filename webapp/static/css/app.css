@@ -25,10 +25,10 @@ body {
 
 ::selection { background: var(--fg); color: var(--bg); }
 
-/* #app wraps the whole UI so display settings apply as ONE global CSS filter
+/* #app wraps the main UI so display settings apply as ONE global CSS filter
  * (brightness/contrast/saturate/invert) — filter creates a containing block
- * for fixed descendants, which is why .crt-fx and #settings-panel live
- * inside it. */
+ * for fixed descendants, which is why .crt-fx lives inside it. The settings
+ * overlay lives outside #app so it stays viewport-fixed and unfiltered. */
 #app { position: relative; min-height: 100vh; }
 
 /* thin theme-colored scrollbars */
@@ -288,10 +288,9 @@ canvas.sim-canvas {
   background: var(--bg);
   border: 1px solid var(--panel-line);
 }
-/* antenna tab: cap viz display size so outputs stay in-frame */
-.ant-cap canvas.sim-canvas { width: 256px; max-width: 100%; height: auto; }
-.ant-cap canvas.smith-canvas { width: 384px; }
-.ant-cap canvas.chart { width: 520px; max-width: 100%; }
+/* antenna tab: smith chart needs more detail than default sim-canvas */
+.ant-cap canvas.smith-canvas { width: 384px; max-width: 100%; }
+.ant-cap canvas.chart { max-width: 100%; }
 .sim-fx {
   position: absolute;
   inset: 22px 0 auto 0; /* below the label */
@@ -321,7 +320,8 @@ table.positions input {
 .hoa-row .scene-panel .row { flex-wrap: wrap; }
 .heat-canvas { margin-top: 8px; }
 .three-wrap { text-align: center; }
-.three-wrap canvas { border: 1px solid var(--panel-line); }
+.three-wrap canvas { border: 1px solid var(--panel-line); max-width: 100%; height: auto; }
+.canvas-wrap canvas { max-width: 100%; height: auto; }
 /* Item 3: terrain 3D viewport + layer view are equal-width 1:1 panels */
 .ter-views > .panel { flex: 1 1 0; min-width: 300px; }
 .ter-views canvas { width: 100%; aspect-ratio: 1; }
@@ -379,24 +379,44 @@ table.positions input {
   opacity: 0.5;
 }
 
-/* ---- settings panel (Feature 7): slide-in display/processing drawer ------ */
-#settings-panel {
+/* ---- settings overlay (Feature 7): pop-up modal on top of everything ------ */
+#settings-overlay {
   position: fixed;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: 300px;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+#settings-overlay.open { pointer-events: auto; }
+#settings-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+#settings-overlay.open #settings-backdrop { opacity: 1; }
+#settings-panel {
+  position: relative;
+  width: 340px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 40px);
   box-sizing: border-box;
   padding: 14px 16px;
   overflow-y: auto;
   background: var(--bg);
-  border-left: 1px solid var(--panel-line);
+  border: 1px solid var(--panel-line);
   color: var(--fg);
-  transform: translateX(100%);
-  transition: transform 0.2s ease;
-  z-index: 10000; /* above .crt-fx so the panel itself stays unfiltered */
+  opacity: 0;
+  transform: scale(0.95);
+  transition: opacity 0.18s ease, transform 0.18s ease;
 }
-#settings-panel.open { transform: translateX(0); }
+#settings-overlay.open #settings-panel {
+  opacity: 1;
+  transform: scale(1);
+}
 #settings-panel .set-head {
   display: flex;
   align-items: center;
