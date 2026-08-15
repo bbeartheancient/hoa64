@@ -764,6 +764,32 @@ def selftest() -> int:
     expect('data-tab="noise"' in r.text, "index noise tab button")
     print(f"PASS noise lab (15 classes, model trained: {nd['model']['trained']})")
 
+    r = client.post("/api/mcu/firmware", json={"board": "esp32", "w": 8, "h": 8})
+    expect(r.status_code == 200, "mcu firmware generate")
+    md = r.json()
+    expect(md["token"] and any(f.endswith(".ino") for f in md["files"]),
+           "mcu firmware payload")
+    ino = next(f for f in md["files"] if f.endswith(".ino"))
+    rf = client.get(f"/api/mcu/file/{md['token']}/{ino}")
+    expect(rf.status_code == 200 and b"FastLED" in rf.content, "mcu firmware download")
+    r = client.post("/api/mcu/firmware", json={"board": "pic32"})
+    expect(r.status_code == 400, "mcu firmware rejects unknown board")
+    r = client.post("/api/mcu/firmware", json={"kind": "bogus"})
+    expect(r.status_code == 400, "mcu firmware rejects unknown kind")
+    r = client.post("/api/mcu/export",
+                    json={"engine": "hadamard_core", "target": "rust_no_std"})
+    me = r.json()
+    expect(r.status_code == 200 and "lib.rs" in me["files"], "mcu edge export")
+    r = client.post("/api/mcu/export", json={"engine": "bogus", "target": "c_baremetal"})
+    expect(r.status_code == 400, "mcu export rejects unknown engine")
+    r = client.get("/js/tabs/microcontroller.js")
+    expect(r.status_code == 200 and "Microcontroller Lab" in r.text,
+           "microcontroller.js tab")
+    r = client.get("/")
+    expect('data-tab="microcontroller"' in r.text, "index mcu tab button")
+    print("PASS mcu lab (firmware + edge export + tab)")
+
+
     r = client.post("/api/filter/design", json={
         "kind": "lpf", "proto": "butterworth", "n": 5, "f_c_mhz": 1000})
     expect(r.status_code == 200, f"filter design: {r.status_code} {r.text[:200]}")
