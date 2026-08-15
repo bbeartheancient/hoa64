@@ -41,7 +41,7 @@ from . import __version__
 from ._png import matrix_png
 
 LIB_DIR = Path.home() / "open_hadamard"
-MAX_ORDER = 4000
+# no hard order ceiling — any 1/2/4k order is accepted; runtime is the limit
 DET_MAX = 500  # compute det_log10 only up to this order
 
 router = APIRouter(prefix="/api")
@@ -84,7 +84,7 @@ def _stats(H: np.ndarray) -> dict:
 
 
 def _valid_order(order: int) -> bool:
-    return 1 <= order <= MAX_ORDER and (order in (1, 2) or order % 4 == 0)
+    return order >= 1 and (order in (1, 2) or order % 4 == 0)
 
 
 # ---------------------------------------------------------------- health
@@ -162,7 +162,7 @@ def _construct(order: int, method: str, seed: int | None) -> np.ndarray | None:
 def construct(req: ConstructReq) -> dict:
     if not _valid_order(req.order):
         return _jsafe(
-            {"ok": False, "error": f"order must be 1, 2 or a multiple of 4, ≤ {MAX_ORDER}"}
+            {"ok": False, "error": "order must be 1, 2 or a multiple of 4"}
         )
     try:
         H = _construct(req.order, req.method, req.seed)

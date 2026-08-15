@@ -3,10 +3,12 @@
 Wraps `noise_data` (NOISEX-92 access + log-mel DSP) and `dit_noise`
 (DiT-backbone classifier, lazy torch):
 
-* ``GET  /classes`` — noise class list + trained-model status.
-* ``POST /train``   — JobManager job running `dit_noise.train_model`;
-  per-epoch ``{epoch, loss, acc, val_acc}`` frames stream over the
-  existing ``WS /ws/job/{job_id}``; `_BudgetStop` becomes the stop_flag.
+* ``GET  /classes`` — 19-class list (15 NOISEX-92 + 4 RF synth) +
+  trained-model status.
+* ``POST /train``   — JobManager job running `dit_noise.train_model`
+  (Muon default, AdamW optional); per-epoch ``{epoch, loss, acc,
+  val_acc}`` frames stream over the existing ``WS /ws/job/{job_id}``;
+  `_BudgetStop` becomes the stop_flag.
 * ``POST /analyze`` — classify a WAV file path OR a live microphone
   capture (`live_audio.capture_wav`, trusted-local only like the other
   path-taking endpoints); returns class probabilities + the log-mel
@@ -38,6 +40,8 @@ _MODEL_PATH = Path(dit_noise.__file__).with_name("dit_noise.pt")
 def classes() -> dict:
     return {
         "classes": noise_data.NOISE_CLASSES,
+        "synth_classes": sorted(noise_data.SYNTH_CLASSES),
+        "recorded_classes": list(noise_data.RECORDED_CLASSES),
         "model": {
             "trained": _MODEL_PATH.exists(),
             "path": str(_MODEL_PATH) if _MODEL_PATH.exists() else None,
@@ -52,6 +56,7 @@ class TrainReq(BaseModel):
     batch_size: int = 64
     max_windows_per_class: int | None = None
     budget_s: float = 1800.0
+    optimizer: str = "muon"  # muon | adamw
 
 
 def _run_train(job: Job) -> dict:
@@ -68,6 +73,7 @@ def _run_train(job: Job) -> dict:
         callback=cb,
         stop_flag=stop,
         out_path=_MODEL_PATH,
+        optimizer=p["optimizer"],
     ))
 
 
@@ -81,11 +87,14 @@ def train(req: TrainReq) -> dict:
         raise HTTPException(status_code=400, detail="max_windows_per_class must be 16..5000")
     if not (10.0 <= req.budget_s <= 86400.0):
         raise HTTPException(status_code=400, detail="budget_s must be 10..86400 s")
+    if req.optimizer not in ("muon", "adamw"):
+        raise HTTPException(status_code=400, detail="optimizer must be muon or adamw")
     job = JOBS.submit("dit_noise_train", _run_train, {
         "epochs": req.epochs,
         "batch_size": req.batch_size,
         "max_windows_per_class": req.max_windows_per_class,
         "budget_s": req.budget_s,
+        "optimizer": req.optimizer,
         "live": {},
     })
     return {"job_id": job.id}

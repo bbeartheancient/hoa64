@@ -152,12 +152,24 @@ def build_model(n_classes: int = 15, n_mels: int = 64, dim: int = 192, depth: in
 
 
 def _train_loop(model, x_tr, y_tr, x_va, y_va, epochs, batch_size, lr, device,
-                classes, callback=None, stop_flag=None) -> list[dict]:
-    """AdamW + cross-entropy epochs over in-memory float32 mel windows."""
+                classes, callback=None, stop_flag=None, optimizer: str = "adamw"
+                ) -> list[dict]:
+    """Cross-entropy epochs over in-memory float32 mel windows.
+
+    ``optimizer`` is ``"adamw"`` (default, used by the tiny self-check)
+    or ``"muon"`` (Dion3/Muon polar-factor update on ndim≥2 weights,
+    AdamW fallback on biases/norms — see ``muon.Muon``).
+    """
     import torch
 
     model.to(device)
-    opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-2)
+    if optimizer == "muon":
+        from .muon import Muon
+        opt = Muon(model.parameters(), lr=lr, adamw_lr=3e-4, weight_decay=1e-2)
+    elif optimizer == "adamw":
+        opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-2)
+    else:
+        raise ValueError(f"unknown optimizer {optimizer!r}; expected muon|adamw")
     lossf = torch.nn.CrossEntropyLoss()
     n = len(x_tr)
     rng = np.random.default_rng(0)
@@ -196,24 +208,34 @@ def _train_loop(model, x_tr, y_tr, x_va, y_va, epochs, batch_size, lr, device,
     return history
 
 
-def train_model(cache_dir=None, epochs: int = 8, batch_size: int = 64, lr: float = 3e-4,
-                win_s: float = 0.65, hop_s: float = 0.32, device=None,
-                max_windows_per_class: int | None = None, callback=None,
-                stop_flag=None, out_path=None) -> dict:
-    """Train the DiT noise classifier on the cached NOISEX-92 files.
+def train_model(cache_dir=None, epochs: int = 8, batch_size: int = 64,
+                lr: float | None = None, win_s: float = 0.65, hop_s: float = 0.32,
+                device=None, max_windows_per_class: int | None = None,
+                callback=None, stop_flag=None, out_path=None,
+                optimizer: str = "muon") -> dict:
+    """Train the DiT noise classifier on NOISEX-92 + synthetic RF classes.
 
-    Every class in ``noise_data.NOISE_CLASSES`` is downloaded (lazily) via
-    ``noise_data.download``; classes whose download/load fails are skipped and
-    reported in the returned dict. Windows of ``win_s`` (hop ``hop_s``) are
-    converted to fixed-normalized log-mel, resized to the model's ``t_len``,
-    split 90/10 train/val, and trained with AdamW + cross-entropy.
-    ``callback({"epoch", "loss", "acc", "val_acc", "classes"})`` fires per
-    epoch; ``stop_flag.is_set()`` is honored between epochs. Saves
-    ``{"state_dict", "classes", "config"}`` to ``out_path`` (default:
-    ``dit_noise.pt`` next to this file — gitignored). Returns an info dict
-    with the final val accuracy and per-class window counts.
+    Every class in ``noise_data.NOISE_CLASSES`` is loaded via
+    ``noise_data.load_noise``: the 15 SPIB recordings are downloaded
+    lazily, the four RF labels (``ble``/``wifi``/``zigbee``/``lora``)
+    are synthesized locally (no network). Classes whose load fails are
+    skipped and reported in the returned dict. Windows of ``win_s``
+    (hop ``hop_s``) are converted to fixed-normalized log-mel, resized
+    to the model's ``t_len``, split 90/10 train/val, and trained with
+    Muon (default) or AdamW + cross-entropy. ``lr`` defaults to 0.02
+    for Muon and 3e-4 for AdamW. ``callback({"epoch", "loss", "acc",
+    "val_acc", "classes"})`` fires per epoch; ``stop_flag.is_set()``
+    is honored between epochs. Saves ``{"state_dict", "classes",
+    "config", "optimizer"}`` to ``out_path`` (default: ``dit_noise.pt``
+    next to this file — gitignored). Returns an info dict with the
+    final val accuracy and per-class window counts.
     """
     import torch  # noqa: F401  (lazy optional dep; presence check)
+
+    if optimizer not in ("muon", "adamw"):
+        raise ValueError(f"unknown optimizer {optimizer!r}; expected muon|adamw")
+    if lr is None:
+        lr = 0.02 if optimizer == "muon" else 3e-4
 
     dev = _device(device)
     feats, labels, counts, skipped = [], [], {}, []
@@ -250,15 +272,16 @@ def train_model(cache_dir=None, epochs: int = 8, batch_size: int = 64, lr: float
 
     model.classes = classes
     history = _train_loop(model, x_all[tr], y_all[tr], x_all[va], y_all[va],
-                          epochs, batch_size, lr, dev, classes, callback, stop_flag)
+                          epochs, batch_size, lr, dev, classes, callback,
+                          stop_flag, optimizer=optimizer)
 
     path = pathlib.Path(out_path) if out_path is not None else _DEFAULT_PATH
     torch.save({"state_dict": model.state_dict(), "classes": classes,
-                "config": model.config}, str(path))
+                "config": model.config, "optimizer": optimizer}, str(path))
     _MODEL_CACHE.clear()
     return {"val_acc": history[-1]["val_acc"], "epochs_ran": len(history),
             "classes": classes, "counts": counts, "skipped": skipped,
-            "out_path": str(path)}
+            "optimizer": optimizer, "out_path": str(path)}
 
 
 def load_model(path=None, device=None):

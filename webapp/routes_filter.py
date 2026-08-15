@@ -196,10 +196,16 @@ def kicad(req: KicadReq) -> dict:
     while len(_KICAD_CACHE) > _KICAD_KEPT:
         _KICAD_CACHE.popitem(last=False)
     packed = _pack(design)
+    # preview the generated board too (footprint preview stays packed["preview"])
+    preview_board = None
+    for fname, content in files.items():
+        if fname.endswith(".kicad_pcb") and preview_board is None:
+            preview_board = kicad_gen.preview_from_text(content)
     return _jsafe({
         "token": token,
         "files": sorted(files),
         "preview": packed["preview"],
+        "preview_board": preview_board,
         "params": packed["params"],
         "metrics": packed["metrics"],
     })

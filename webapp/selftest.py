@@ -483,6 +483,26 @@ def selftest() -> int:
             )
     print(f"PASS detbounds max=64 — {len(d['entries'])} entries, sylvester at bound")
 
+    r = client.get("/api/challenges")
+    expect(r.status_code == 200, "GET /api/challenges")
+    ch = r.json()
+    expect(len(ch["challenges"]) == 23 and len(ch["alignment"]) == 23,
+           "challenges payload must be 23+23")
+    expect(ch["summary"]["total"] == 23 and ch["summary"]["counts"]["active"] == 1,
+           "challenges summary")
+    expect(any(c["n"] == 19 and "Riemann" in c["title"] for c in ch["challenges"]),
+           "challenge 19 (Riemann) missing")
+    expect(any(a["n"] == 19 and a["status"] == "active" for a in ch["alignment"]),
+           "challenge 19 must be the active rh.py anchor")
+    expect(any(e["module"] == "muon.py"
+               for a in ch["alignment"] for e in a.get("engines") or []),
+           "muon.py must appear in the challenges alignment")
+    r = client.get("/js/tabs/library.js")
+    expect(r.status_code == 200 and "DARPA" in r.text and "challenges" in r.text,
+           "library.js missing CHALLENGES layer")
+    expect("lib-layer-select" in r.text, "library.js missing layer select")
+    print("PASS DARPA-23 challenges frame (API + Library CHALLENGES layer)")
+
     # ------------------------------------------------ ℍ³ hadamard space
     from .. import hadamard_space as _hs
 
@@ -752,17 +772,31 @@ def selftest() -> int:
     r = client.get("/api/noise/classes")
     expect(r.status_code == 200, "noise classes endpoint")
     nd = r.json()
-    expect(len(nd["classes"]) == 15 and isinstance(nd["model"]["trained"], bool),
+    expect(len(nd["classes"]) == 19 and isinstance(nd["model"]["trained"], bool),
            "noise classes payload")
+    expect(nd["classes"][:15] == [
+        "white", "pink", "babble", "factory1", "factory2",
+        "buccaneer1", "buccaneer2", "f16", "destroyerengine", "destroyerops",
+        "leopard", "m109", "machinegun", "volvo", "hfchannel"],
+           "recorded class order must stay pinned")
+    expect(nd["classes"][15:] == ["ble", "wifi", "zigbee", "lora"],
+           "RF synth classes must be appended")
+    expect(set(nd["synth_classes"]) == {"ble", "wifi", "zigbee", "lora"},
+           "synth_classes payload")
+    expect(len(nd["recorded_classes"]) == 15, "recorded_classes payload")
     r = client.post("/api/noise/analyze", json={})
     expect(r.status_code == 400, "noise analyze needs path xor live_seconds")
     r = client.post("/api/noise/analyze", json={"path": "/nonexistent.wav"})
     expect(r.status_code == 400, "noise analyze bad input → 400")
+    r = client.post("/api/noise/train", json={"epochs": 1, "optimizer": "sgd"})
+    expect(r.status_code == 400, "noise train rejects unknown optimizer")
     r = client.get("/js/tabs/noise.js")
     expect(r.status_code == 200 and "NOISE LAB" in r.text, "noise.js tab")
+    expect("noi-t-opt" in r.text and "MUON" in r.text, "noise.js muon selector")
+    expect("noi-class-list" in r.text, "noise.js class list")
     r = client.get("/")
     expect('data-tab="noise"' in r.text, "index noise tab button")
-    print(f"PASS noise lab (15 classes, model trained: {nd['model']['trained']})")
+    print(f"PASS noise lab (19 classes, 4 RF synth, model trained: {nd['model']['trained']})")
 
     r = client.post("/api/mcu/firmware", json={"board": "esp32", "w": 8, "h": 8})
     expect(r.status_code == 200, "mcu firmware generate")
@@ -848,11 +882,27 @@ def selftest() -> int:
     mk = r.json()
     expect(r.status_code == 200 and any(f.endswith(".kicad_mod") for f in mk["files"]),
            "materials kicad")
+    expect(mk.get("preview_board") and mk["preview_board"].get("prims"),
+           "materials kicad missing preview_board")
+    board_layers = {p.get("layer") for p in mk["preview_board"]["prims"]}
+    expect("F.Cu" in board_layers and "B.Cu" in board_layers,
+           f"materials board preview missing 2-layer copper: {board_layers}")
+    expect(not any(p.get("kind") == "zone" for p in mk["preview_board"]["prims"]),
+           "materials board preview still has a B.Cu GND pour")
+    pcb_name = next(f for f in mk["files"] if f.endswith(".kicad_pcb"))
+    pcb = client.get(f"/api/materials/kicad/{mk['token']}/{pcb_name}")
+    expect(pcb.status_code == 200 and "(zone" not in pcb.text,
+           "materials .kicad_pcb still contains a zone/pour")
+    expect('(layers "B.Cu")' in pcb.text and '(layers "F.Cu")' in pcb.text,
+           "materials .kicad_pcb missing per-layer pads")
     r = client.get("/js/tabs/materials.js")
     expect(r.status_code == 200 and "MATERIALS LAB" in r.text, "materials.js tab")
+    expect("mat-prev-toggle" in r.text and "lastKicadPreviewBoard" in r.text,
+           "materials.js missing FOOTPRINT/BOARD toggle")
     r = client.get("/")
     expect('data-tab="materials"' in r.text, "index materials tab")
-    print(f"PASS materials lab (cloth/touch/meta + kicad {len(mk['files'])} files)")
+    print(f"PASS materials lab (cloth/touch/meta + kicad {len(mk['files'])} files, "
+          "2-layer no pour)")
 
     # ------------------------------------------------ Phase 4.5: HUD themes
     r = client.get("/css/themes.css")
@@ -1157,6 +1207,7 @@ def selftest() -> int:
         ("POST", "/api/gen/noise-field", {"size": 32, "order": 16, "seed": 1}),
         ("GET", "/api/dag?max=128", None),
         ("GET", "/api/detbounds?max=64", None),
+        ("GET", "/api/challenges", None),
         ("GET", "/api/palettes", None),
         ("POST", "/api/construct", {"order": 64, "method": "sylvester"}),
         ("GET", "/api/library/64", None),

@@ -705,6 +705,197 @@ def stokes(ex, ey) -> dict:
     return out
 
 
+# --- phased arrays -----------------------------------------------------------
+
+TAPERS: dict[str, str] = {"uniform": "uniform weights (no taper)",
+                          "binomial": "C(n−1, k) Vandermonde weights — no "
+                          "sidelobes at all, wide main lobe",
+                          "chebyshev": "Dolph–Chebyshev equal-ripple "
+                          "sidelobes at a given SLL (30 dB default)"}
+
+
+def array_taper(n: int, kind: str = "uniform", sll_db: float = 30.0
+                ) -> np.ndarray:
+    """Amplitude weights a_k (k = 0..n−1), peak-normalized to 1.
+
+    uniform     all ones — narrowest beam, −13.26 dB first sidelobe.
+    binomial    C(n−1, k) — the array factor is (1+e^{jψ})^{n−1}, so all
+                sidelobes vanish exactly.
+    chebyshev   Dolph–Chebyshev: |AF(ψ)| = |T_{n−1}(z)| with z =
+                z₀ cos(ψ/2), z₀ = cosh(acosh(10^{SLL/20})/(n−1)) — equal
+                ripple at exactly SLL dB, the narrowest such beam.
+    """
+    if kind == "uniform":
+        return np.ones(n)
+    if kind == "binomial":
+        from math import comb
+        m = n - 1
+        return np.array([comb(m, k) for k in range(n)], dtype=float) / comb(m, m // 2)
+    if kind == "chebyshev":
+        if n < 3:
+            raise ValueError("chebyshev taper needs n ≥ 3")
+        if not (sll_db > 0.0):
+            raise ValueError("sll_db must be > 0")
+        r0 = 10.0 ** (sll_db / 20.0)          # main/sidelobe voltage ratio
+        z0 = math.cosh(math.acosh(r0) / (n - 1))
+        # AF(ψ) = T_{n−1}(z0 cos(ψ/2)), ψ the inter-element phase.  For the
+        # CENTRED array AF_c(ψ) = Σ_j a_j e^{j(j−c)ψ}, c = (n−1)/2 — for even
+        # n these are half-integer harmonics, so a plain n-point DFT aliases;
+        # sample on a fine M ≥ 4n grid and project instead (exact for
+        # trigonometric polynomials of degree < M/2).  T_m(x) =
+        # cosh(m·arcosh x) with complex arcosh is exact everywhere.
+        c = (n - 1) / 2.0
+        M = 4 * n
+        psi = 2.0 * np.pi * np.arange(M) / M
+        x = z0 * np.cos(psi / 2.0)
+        afc = np.cosh((n - 1) * np.arccosh(x.astype(complex))).real
+        j = np.arange(n)[:, None]
+        w = (afc[None, :] * np.exp(-1j * (j - c) * psi[None, :])).sum(axis=1).real / M
+        w = np.abs(w)
+        if w.max() <= 0.0:
+            raise ValueError("degenerate Chebyshev weights")
+        return w / w.max()
+    raise ValueError(f"unknown taper {kind!r} (uniform|binomial|chebyshev)")
+
+
+def array_factor(theta: np.ndarray, n: int, d_lambda: float,
+                 taper: np.ndarray | str = "uniform",
+                 steer_deg: float = 0.0) -> np.ndarray:
+    """Complex array factor AF(θ) of an n-element linear broadside array in
+    the x–z plane (element spacing d in wavelengths, progressive phase for
+    beam steering toward θ₀ off broadside):
+
+        AF(θ) = Σ_k a_k · e^{ j k · 2π d (sinθ − sinθ₀) },  k = 0..n−1.
+
+    Returns complex AF normalized so max|AF| = 1.  `theta` is the polar
+    angle from +z (broadside = 0) in radians; a full −π..π sweep shows the
+    forward lobe and any grating lobes.
+    """
+    theta = np.asarray(theta, dtype=float)
+    if isinstance(taper, str):
+        a = array_taper(n, taper)
+    else:
+        a = np.asarray(taper, dtype=float)
+        if a.shape != (n,):
+            raise ValueError(f"taper length {a.shape[0]} != n = {n}")
+    psi = 2.0 * np.pi * d_lambda * (np.sin(theta)
+                                    - math.sin(math.radians(steer_deg)))
+    k = np.arange(n)[:, None]
+    af = (a[:, None] * np.exp(1j * k * psi[None, :])).sum(axis=0)
+    m = np.abs(af).max()
+    return af / m if m > 0 else af
+
+
+def array_metrics(n: int, d_lambda: float, taper="uniform",
+                  steer_deg: float = 0.0) -> dict:
+    """Beam metrics of a linear array on a dense ±90° sweep:
+
+    hpbw_deg    half-power beamwidth (quadratic-interpolated −3 dB points
+                around the steered peak; None for binomial n = 1)
+    sll_db      first sidelobe level below the main peak (dB, negative;
+                −inf when no sidelobe exceeds the floor)
+    grating     first grating-lobe angle (deg off broadside) when
+                d(sinθ−sinθ₀) ≥ 1 admits a visible replica, else None
+    directivity_dbi  taper efficiency η = |Σa|²/(N·Σ|a|²) times the
+                    Kraus broadside estimate 2Nd/λ for isotropic elements:
+                    D ≈ 10 log10 (|Σa|²/Σ|a|² · 2d/λ)
+    """
+    th = np.linspace(-math.pi / 2, math.pi / 2, 3601)
+    mag = np.abs(array_factor(th, n, d_lambda, taper, steer_deg))
+    db = 20.0 * np.log10(np.maximum(mag, 1e-12))
+    theta0 = math.radians(steer_deg)
+    peak = int(np.argmin(np.abs(np.sin(th) - math.sin(theta0))))
+    # HPBW: −3 dB crossings around the steered peak
+    half = db - db[peak] + 3.0
+    crossings = []
+    for i in range(1, len(th)):
+        if half[i - 1] < 0.0 <= half[i] or half[i - 1] >= 0.0 > half[i]:
+            t = th[i - 1] + (0.0 - half[i - 1]) / (half[i] - half[i - 1]) * (th[i] - th[i - 1])
+            crossings.append(t)
+    near = sorted(crossings, key=lambda t: abs(t - th[peak]))[:2]
+    hpbw = math.degrees(abs(near[-1] - near[0])) if len(near) >= 2 else None
+    # sidelobe: highest local max outside the main lobe (between the near
+    # crossings, or ±5° of the peak if binomial nulls are numerically tiny)
+    # sidelobe: highest local maximum outside the main-lobe nulls
+    lo = near[0] if near else th[0]
+    hi = near[-1] if near else th[-1]
+    i = peak
+    while i > 0 and db[i - 1] < db[i]:          # walk left to the null
+        i -= 1
+    lo = th[i - 1] if i > 0 else th[0]
+    i = peak
+    while i < len(th) - 1 and db[i + 1] < db[i]:  # walk right to the null
+        i += 1
+    hi = th[i + 1] if i < len(th) - 1 else th[-1]
+    mask = (th < lo) | (th > hi)
+    sll = float(db[mask].max()) if mask.any() else -np.inf
+    # grating lobe: an integer-m replica sinθ_m = sinθ₀ + m/d enters ±90°
+    grating = None
+    s0 = math.sin(theta0)
+    for mm in range(-n, n + 1):
+        if mm == 0:
+            continue
+        sm = s0 + mm / d_lambda
+        if abs(sm) <= 1.0 + 1e-9:
+            grating = math.degrees(math.asin(np.clip(sm, -1.0, 1.0)))
+            break
+    a = array_taper(n, taper) if isinstance(taper, str) else np.asarray(taper, float)
+    # D ≈ η_taper · 2Nd/λ (Kraus), η_taper = |Σa|²/(N Σ|a|²)
+    direc = 10.0 * math.log10((np.abs(a.sum()) ** 2 / np.sum(np.abs(a) ** 2)) * 2.0 * d_lambda)
+    return {"hpbw_deg": hpbw, "sll_db": sll,
+            "grating_lobe_deg": grating,
+            "directivity_dbi": float(direc),
+            "taper_sum": float(a.sum()), "n": n, "d_lambda": d_lambda,
+            "steer_deg": steer_deg, "taper": taper if isinstance(taper, str) else "custom"}
+
+
+def design_array(n: int, f_hz: float, d_mm: float | None = None,
+                 d_lambda: float | None = None, taper: str = "uniform",
+                 steer_deg: float = 0.0, sll_db: float = 30.0,
+                 medium: str = "air", element: str = "dipole",
+                 n_theta: int = 361) -> dict:
+    """Full array design record: element pattern × array factor on a θ grid.
+
+    The total pattern multiplies the isotropic-array factor by the chosen
+    element's normalized pattern (pattern multiplication principle) — a
+    dipole element suppresses the endfire grating lobes of the AF alone.
+    Returns θ (deg, −90..90), af_db, total_db, metrics, and the layout
+    (element x positions in mm along the array axis).
+    """
+    if n < 1 or n > 512:
+        raise ValueError("n must be 1..512 elements")
+    if d_mm is None and d_lambda is None:
+        raise ValueError("give d_mm or d_lambda")
+    if (d_mm is not None and d_mm <= 0) or (d_lambda is not None and d_lambda <= 0):
+        raise ValueError("spacing must be > 0")
+    mp = medium_params(f_hz, medium)
+    lam_mm = mp["wavelength"] * 1000.0
+    d_lam = d_lambda if d_lambda is not None else d_mm / lam_mm
+    a = array_taper(n, taper, sll_db)
+    th = np.linspace(-math.pi / 2, math.pi / 2, n_theta)
+    af = array_factor(th, n, d_lam, a, steer_deg)
+    af_db = 20.0 * np.log10(np.maximum(np.abs(af), 1e-9))
+    elem = ANTENNA_TYPES[element](f_hz, medium=medium)
+    ep = np.array([float(elem["pattern"](t, 0.0)) for t in th])
+    ep = ep / max(ep.max(), 1e-12)
+    total = np.abs(af) * ep
+    total_db = 20.0 * np.log10(np.maximum(total, 1e-12))
+    metrics = array_metrics(n, d_lam, a, steer_deg)
+    return {
+        "n": n, "f_hz": f_hz, "medium": medium, "element": element,
+        "wavelength_mm": lam_mm, "d_mm": d_lam * lam_mm, "d_lambda": d_lam,
+        "taper": taper, "sll_db": sll_db, "steer_deg": steer_deg,
+        "theta_deg": np.degrees(th).round(2).tolist(),
+        "af_db": af_db.round(3).tolist(),
+        "total_db": total_db.round(3).tolist(),
+        "metrics": metrics,
+        "element_x_mm": (np.arange(n) * d_lam * lam_mm).round(3).tolist(),
+        "aperture_mm": round((n - 1) * d_lam * lam_mm, 3),
+        "notes": f"{n}-element {element} linear array, {taper} taper, "
+                 f"d = {d_lam:.3f} λ, steered {steer_deg:+.1f}°",
+    }
+
+
 # --- self-check --------------------------------------------------------------
 
 if __name__ == "__main__":
@@ -787,4 +978,36 @@ if __name__ == "__main__":
                 "notes"} <= set(ant), name
         assert 0.0 <= float(ant["pattern"](np.pi / 2, 0.0)) <= 1.0 + 1e-9
     print(f"PASS  ANTENNA_TYPES registry: {sorted(ANTENNA_TYPES)} all build")
+
+    # --- phased arrays ---
+    # uniform 10×λ/2 broadside: textbook HPBW ≈ 10.2°, SLL ≈ −13.26 dB,
+    # Kraus directivity 2Nd/λ = 10 → 10 dBi
+    mu = array_metrics(10, 0.5, "uniform")
+    assert abs(mu["hpbw_deg"] - 10.2) < 0.5, mu["hpbw_deg"]
+    assert abs(mu["sll_db"] + 13.26) < 0.5, mu["sll_db"]
+    assert abs(mu["directivity_dbi"] - 10.0) < 0.2, mu["directivity_dbi"]
+    assert mu["grating_lobe_deg"] is None
+    print(f"PASS  array uniform 10×λ/2: HPBW = {mu['hpbw_deg']:.2f}° ≈ 10.2°, "
+          f"SLL = {mu['sll_db']:.2f} dB ≈ −13.26, D = {mu['directivity_dbi']:.2f} dBi")
+
+    # Dolph–Chebyshev hits its SLL target exactly, symmetric weights
+    for nn, sll_t in ((8, 30.0), (9, 35.0), (16, 40.0)):
+        a = array_taper(nn, "chebyshev", sll_t)
+        assert np.allclose(a, a[::-1], atol=1e-6), (nn, a)
+        mc = array_metrics(nn, 0.5, a)
+        assert abs(mc["sll_db"] + sll_t) < 0.5, (nn, mc["sll_db"])
+    print("PASS  array chebyshev: SLL −30/−35/−40 dB targets met "
+          "(n = 8/9/16), weights symmetric")
+
+    # binomial has no sidelobes; steering moves the peak; d = λ grating lobe
+    mb = array_metrics(8, 0.5, "binomial")
+    assert mb["sll_db"] < -60.0, mb["sll_db"]
+    assert mb["hpbw_deg"] > array_metrics(8, 0.5, "uniform")["hpbw_deg"]
+    da = design_array(10, 2.45e9, d_lambda=0.5, steer_deg=30.0)
+    assert da["theta_deg"][int(np.argmax(da["af_db"]))] == 30.0
+    dg = design_array(8, 2.45e9, d_lambda=1.0)
+    assert dg["metrics"]["grating_lobe_deg"] is not None
+    assert len(da["element_x_mm"]) == 10 and da["aperture_mm"] > 0.0
+    print("PASS  array binomial/grating/steer: binomial sidelobe-free, "
+          "30° steer peaks at 30°, d = λ grating lobe flagged")
     print("em_physics selftest: all checks passed")

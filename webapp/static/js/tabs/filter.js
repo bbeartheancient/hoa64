@@ -23,6 +23,7 @@ const LUMPED = new Set(["lc", "rc", "crc", "rl", "dc_lc"]);
 let msgEl, layerBtns = {}, panels = {};
 let layer = "design";
 let lastPacked = null;          // last /design or /evolve result
+let lastKicadPreviewBoard = null, kicadPreviewMode = "footprint";
 let sCanvas, kCanvas;
 let eWs = null, eJob = null, eChart, eCancelBtn, eStatusEl, eStatsEl;
 
@@ -226,7 +227,18 @@ function drawSweep() {
 
 function drawPreview(preview) {
   if (!kCanvas) return;
-  drawKicadPrims(kCanvas, preview || (lastPacked && lastPacked.preview));
+  const prev = preview || ((kicadPreviewMode === "board" && lastKicadPreviewBoard)
+    ? lastKicadPreviewBoard : (lastPacked && lastPacked.preview));
+  drawKicadPrims(kCanvas, prev);
+}
+
+function syncKicadPreviewBtns() {
+  const row = document.getElementById("flt-k-prev-toggle");
+  if (row) row.classList.toggle("hidden", !lastKicadPreviewBoard);
+  const fpBtn = document.getElementById("flt-k-prev-fp");
+  if (fpBtn) fpBtn.style.opacity = kicadPreviewMode === "footprint" ? "1" : "0.45";
+  const boardBtn = document.getElementById("flt-k-prev-board");
+  if (boardBtn) boardBtn.style.opacity = kicadPreviewMode === "board" ? "1" : "0.45";
 }
 
 function showPacked(d, metricsHost) {
@@ -256,8 +268,11 @@ async function doKicad() {
     if (lastPacked && lastPacked.design) body.design = lastPacked.design;
     const d = await api("/api/filter/kicad", body);
     lastPacked = { ...(lastPacked || {}), preview: d.preview, params: d.params, metrics: d.metrics };
+    lastKicadPreviewBoard = d.preview_board || null;
+    if (!lastKicadPreviewBoard) kicadPreviewMode = "footprint";
     renderMetrics("flt-k-metrics", d.metrics, d.params);
-    drawPreview(d.preview);
+    drawPreview();
+    syncKicadPreviewBtns();
     const host = document.getElementById("flt-k-files");
     host.replaceChildren(
       ...(d.files || []).map((name) =>
@@ -444,6 +459,9 @@ export function init(container) {
     ),
     el("div", { class: "panel" },
       el("h2", {}, "Preview"),
+      el("div", { class: "btn-row hidden", id: "flt-k-prev-toggle" },
+        el("button", { class: "btn", id: "flt-k-prev-fp" }, "[FOOTPRINT]"),
+        el("button", { class: "btn", id: "flt-k-prev-board" }, "[BOARD]")),
       el("div", { class: "panel-row" }, el("div", { class: "sim-cell" }, el("div", { class: "sim-label" }, "KiCad copper"), kCanvas)),
       el("div", { class: "dim" }, "red F.Cu · blue B.Cu · (green In1 / orange In2 reserved)")
     ),
@@ -470,6 +488,17 @@ export function init(container) {
   document.getElementById("flt-proto").addEventListener("change", syncKindForm);
   document.getElementById("flt-d-run").addEventListener("click", doDesign);
   document.getElementById("flt-k-run").addEventListener("click", doKicad);
+  document.getElementById("flt-k-prev-fp").addEventListener("click", () => {
+    kicadPreviewMode = "footprint";
+    drawPreview();
+    syncKicadPreviewBtns();
+  });
+  document.getElementById("flt-k-prev-board").addEventListener("click", () => {
+    if (!lastKicadPreviewBoard) return;
+    kicadPreviewMode = "board";
+    drawPreview();
+    syncKicadPreviewBtns();
+  });
   document.getElementById("flt-e-run").addEventListener("click", doEvolve);
   document.getElementById("flt-e-kicad").addEventListener("click", () => { selectLayer("kicad"); doKicad(); });
   eCancelBtn.addEventListener("click", doCancelEvolve);

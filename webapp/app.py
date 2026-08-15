@@ -21,6 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from .routes_antenna import router as antenna_router
+from .routes_challenges import router as challenges_router
 from .routes_filter import router as filter_router
 from .routes_materials import router as materials_router
 from .routes_mcu import router as mcu_router
@@ -56,6 +57,7 @@ def create_app() -> FastAPI:
     app.include_router(materials_router)
     app.include_router(mcu_router)
     app.include_router(noise_router)
+    app.include_router(challenges_router)
     app.include_router(search_ws_router)
 
     # Any /api/* request that matched no router would otherwise fall

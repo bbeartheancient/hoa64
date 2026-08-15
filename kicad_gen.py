@@ -54,6 +54,9 @@ base — TI SWRA117D and friends, linearly scaled as f_ref/f.
 **Preview.**  `preview_from_sexpr` walks pads / lines / polys / zones
 into JSON primitives the webapp draws.  Every design type also emits a
 ``.kicad_pcb`` (`board_from_footprint`: Edge.Cuts + B.Cu GND ≥ 6h).
+Materials boards pass ``gnd_pour=False`` — their B.Cu *is* the reverse
+layout, and a pour would short it.  ``footprint_from_layout`` honors a
+per-rect ``layer`` (copper → pad, silk → ``fp_rect``).
 
 **Validity.**  `parse_sexpr` is a real tokenizer/parser (nested
 lists, quoted strings), not a paren counter; the self-check parses
@@ -919,11 +922,14 @@ def _emit_sexpr(node) -> str:
 
 
 def board_from_footprint(fp_text: str, f_hz: float, eps_r: float = 4.4,
-                         h_m: float = 1.6e-3, title: str | None = None
-                         ) -> str:
+                         h_m: float = 1.6e-3, title: str | None = None,
+                         gnd_pour: bool = True) -> str:
     """Wrap a footprint in a KiCad 7 board: Edge.Cuts + B.Cu GND pour
     extending 6h beyond the radiator (JLCPCB / Balanis), keep-out under
     the radiator so the pour does not fill the antenna copper.
+
+    ``gnd_pour=False`` skips the B.Cu zone — required for materials
+    boards, whose B.Cu carries the H=−1 layer of the layout itself.
     """
     tree = parse_sexpr(fp_text)
     prev = preview_from_sexpr(tree)
@@ -955,20 +961,23 @@ def board_from_footprint(fp_text: str, f_hz: float, eps_r: float = 4.4,
         '  (net 2 "ANT")',
         "  " + _emit_sexpr(placed),
         _fp_rect((bx0, by0), (bx1, by1), "Edge.Cuts", width=0.05, gr=True),
-        _keepout_zone_rect((b["xmin"] - 0.5, b["ymin"] - 0.5),
-                           (b["xmax"] + 0.5, b["ymax"] + 0.5), "F.Cu"),
-        '  (zone (net 1) (net_name "GND") (layer "B.Cu") '
-        f"(tstamp {_tstamp()})\n"
-        "    (hatch edge 0.5)\n"
-        "    (connect_pads (clearance 0.5))\n"
-        "    (min_thickness 0.25)\n"
-        "    (fill yes (thermal_gap 0.5) (thermal_bridge_width 0.5))\n"
-        "    (polygon (pts "
-        + " ".join(_xy(pt) for pt in [(xmin, ymin), (xmax, ymin),
-                                      (xmax, ymax), (xmin, ymax)])
-        + ")))",
-        ")",
     ]
+    if gnd_pour:
+        parts.append(
+            _keepout_zone_rect((b["xmin"] - 0.5, b["ymin"] - 0.5),
+                               (b["xmax"] + 0.5, b["ymax"] + 0.5), "F.Cu"))
+        parts.append(
+            '  (zone (net 1) (net_name "GND") (layer "B.Cu") '
+            f"(tstamp {_tstamp()})\n"
+            "    (hatch edge 0.5)\n"
+            "    (connect_pads (clearance 0.5))\n"
+            "    (min_thickness 0.25)\n"
+            "    (fill yes (thermal_gap 0.5) (thermal_bridge_width 0.5))\n"
+            "    (polygon (pts "
+            + " ".join(_xy(pt) for pt in [(xmin, ymin), (xmax, ymin),
+                                          (xmax, ymax), (xmin, ymax)])
+            + ")))")
+    parts.append(")")
     return "\n".join(parts) + "\n"
 
 
@@ -976,22 +985,43 @@ def _with_board(mod_name: str, fp: str, f_hz: float, opts: dict,
                 title: str | None = None) -> dict:
     eps = float(opts.get("eps_r", 4.4))
     hm = float(opts.get("h_m", 1.6e-3))
+    gnd_pour = bool(opts.get("gnd_pour", True))
     pcb_name = mod_name.replace(".kicad_mod", ".kicad_pcb")
     return {
         mod_name: fp,
-        pcb_name: board_from_footprint(fp, f_hz, eps, hm, title=title),
+        pcb_name: board_from_footprint(fp, f_hz, eps, hm, title=title,
+                                       gnd_pour=gnd_pour),
     }
+
+
+_CU_LAYER_RE = re.compile(r"^(?:F|B|In\d+)\.Cu$")
 
 
 def footprint_from_layout(layout: dict, name: str, descr: str,
                           comment: str) -> str:
-    """KiCad footprint from an rf_filter / antenna layout dict (mm)."""
+    """KiCad footprint from an rf_filter / antenna / materials layout (mm).
+
+    A rect/pad ``layer`` field is honored: copper layers become pads on
+    that layer (materials boards are deliberately 2-layer F.Cu/B.Cu);
+    non-copper layers (silk etc.) are drawn as ``fp_rect`` instead —
+    silk cannot be a pad.  No ``layer`` key defaults to F.Cu, as before.
+    """
+    def _place(tag: str, g: dict) -> str:
+        layer = g.get("layer")
+        if layer is not None and not _CU_LAYER_RE.match(str(layer)):
+            # drawn graphic on silk/fab, not a pad
+            x, y = float(g["x"]), float(g["y"])
+            w, h = float(g["w"]) / 2.0, float(g["h"]) / 2.0
+            return _fp_rect((x - w, y - h), (x + w, y + h), str(layer))
+        layers = (f'"{layer}"',) if layer is not None else ('"F.Cu"',)
+        return _pad_rect(tag, (g["x"], g["y"]), (g["w"], g["h"]),
+                         layers=layers)
+
     body = []
     for i, r in enumerate(layout.get("rects") or []):
-        body.append(_pad_rect(f"T{i}", (r["x"], r["y"]), (r["w"], r["h"])))
+        body.append(_place(f"T{i}", r))
     for p in layout.get("pads") or []:
-        body.append(_pad_rect(str(p["name"]), (p["x"], p["y"]),
-                              (p["w"], p["h"])))
+        body.append(_place(str(p["name"]), p))
     for v in layout.get("vias") or []:
         body.append(_pad_th("", (v["x"], v["y"]), float(v["d"])))
     b = layout["bbox"]
@@ -1378,6 +1408,9 @@ def kicad_files(design_type: str, f_hz: float, **opts) -> dict:
         descr = opts.get("descr") or "hoa64 materials lab"
         comment = opts.get("comment") or "flux-tile cloth/touch/meta"
         fp = footprint_from_layout(lay, name, descr, comment)
+        # 2-layer H± copper — a full-board B.Cu GND pour would short the
+        # reverse layer, so materials boards ship without the pour.
+        opts = {**opts, "gnd_pour": False}
         return _with_board(f"{name}.kicad_mod", fp, f_hz, opts, title=name)
     raise ValueError(
         f"unknown design_type {design_type!r}; "
@@ -1522,6 +1555,42 @@ if __name__ == "__main__":
     bev = board_from_footprint(fev, F0)
     assert parse_sexpr(bev)[0] == "kicad_pcb" and '"Edge.Cuts"' in bev
     print(f"PASS  footprint_from_walk + board_from_footprint ({len(walk)} pts)")
+
+    # --- materials: per-rect layer honored, no B.Cu GND pour on board ---
+    mix = {
+        "rects": [
+            {"x": 0.0, "y": 0.0, "w": 2.0, "h": 1.0, "layer": "F.Cu"},
+            {"x": 3.0, "y": 0.0, "w": 2.0, "h": 1.0, "layer": "B.Cu"},
+            {"x": 6.0, "y": 0.0, "w": 2.0, "h": 1.0, "layer": "F.SilkS"},
+        ],
+        "pads": [], "vias": [],
+        "bbox": {"xmin": -1.0, "ymin": -0.5, "xmax": 7.0, "ymax": 0.5},
+    }
+    fmix = footprint_from_layout(mix, "mix_test", "d", "c")
+    mtree = parse_sexpr(fmix)
+    assert mtree[0] == "footprint"
+    mpads = _find_all(mtree, "pad")
+    assert len(mpads) == 2, "silk rect must not become a pad"
+    assert '(layers "F.Cu")' in fmix and '(layers "B.Cu")' in fmix
+    silk = [r for r in _find_all(mtree, "fp_rect")
+            if any(isinstance(c, list) and c and c[0] == "layer"
+                   and '"F.SilkS"' in str(c) for c in r)]
+    assert len(silk) == 2, "silk cell + courtyard"  # cell + bounding rect
+    mfiles = kicad_files("materials", 16e6, layout=mix, name="mix_test")
+    mpcb = next(v for k, v in mfiles.items() if k.endswith(".kicad_pcb"))
+    assert "(zone" not in mpcb, "materials board must have no zone/pour"
+    assert '(layers "B.Cu")' in mpcb
+    fpcb = next(v for k, v in files_f.items() if k.endswith(".kicad_pcb"))
+    assert "(zone" in fpcb, "filter board keeps the B.Cu GND pour"
+    # default: no layer key → F.Cu pads, unchanged behavior
+    nolayer = footprint_from_layout(
+        {"rects": [{"x": 0.0, "y": 0.0, "w": 1.0, "h": 1.0}],
+         "pads": [], "vias": [],
+         "bbox": {"xmin": -0.5, "ymin": -0.5, "xmax": 0.5, "ymax": 0.5}},
+        "nolayer", "d", "c")
+    assert '(layers "F.Cu")' in nolayer and '"B.Cu"' not in nolayer
+    print("PASS  materials: B.Cu pad + silk rect in footprint, no (zone in "
+          "materials board, filter board keeps GND pour")
 
     # --- kicad_files round-trip for built-in design types ---
     files = {}

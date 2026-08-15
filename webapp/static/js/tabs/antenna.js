@@ -9,6 +9,7 @@
 //   KICAD   PCB footprint/board export (MIFA, RF_Antenna.pretty lib,
 //           evolved walks) + JLCPCB design_params + canvas preview
 //   SMITH   Γ-plane MoM Z_in(f) sweep with interactive hover readout
+//   ARRAY   POST /api/antenna/array → polar pattern plot + beam metrics
 // Site survey has moved to the Terrain tab (terrain.js — [SURVEY] button).
 // Server PNG canvases go through retintCanvas (registers them for
 // themechange re-tints); the wire canvas redraws on themechange itself.
@@ -22,7 +23,7 @@ import { makeStripChart } from "/js/viz/stripchart.js";
 import { retintCanvas, themeColor } from "/js/theme.js";
 import { drawKicadPrims } from "/js/kicad_layers.js";
 
-const LAYERS = { design: "DESIGN", parts: "PARTS", fields: "FIELDS", evolve: "EVOLVE", kicad: "KICAD", smith: "SMITH" };
+const LAYERS = { design: "DESIGN", parts: "PARTS", fields: "FIELDS", evolve: "EVOLVE", kicad: "KICAD", smith: "SMITH", array: "ARRAY" };
 // entry.type → kicad design_type (first substring match wins)
 const KICAD_MAP = [
   ["pifa", "meander_ifa"],
@@ -44,6 +45,7 @@ let f3Cell = null;
 // evolve job state
 let eWs = null, eJob = null, eChart, eCancelBtn, eStatusEl, eStatsEl;
 let smithCanvas, smithReadout, lastSweep = null;
+let arrayCanvas, arrayStatsEl, lastArray = null;
 let lastEvolvePoints = null, lastDesignEntries = null;
 let wireCanvas, patternCanvas, patternCell;
 let lastPoints = null; // last evolve points — redrawn on themechange
@@ -711,6 +713,7 @@ function onThemechange() {
   drawWire();
   drawSmith();
   drawKicadPreview();
+  drawArray();
 }
 
 // ---- SMITH ------------------------------------------------------------------
@@ -853,6 +856,126 @@ function onSmithHover(ev) {
   } else {
     smithReadout.textContent = "hover the trace for f / Z / Γ / S11";
     drawSmith();
+  }
+}
+
+// ---- ARRAY ------------------------------------------------------------------
+// Polar pattern of total_db (element × AF, fg) with af_db underneath (dim),
+// floored at −40 dB; θ runs −90..90° off broadside so the plot is the upper
+// semicircle (θ=0 up). Guide rays mark the steered beam and the first
+// grating lobe when metrics.grating_lobe_deg is set. Redraws on themechange.
+
+const ARRAY_FLOOR_DB = -40;
+
+function arrayPolar(canvas, thetaDeg, db, R) {
+  const cx = canvas.width / 2, cy = canvas.height - 26;
+  const a = (thetaDeg * Math.PI) / 180;
+  const r = Math.max(0, Math.min(1, (db - ARRAY_FLOOR_DB) / -ARRAY_FLOOR_DB));
+  return [cx + r * R * Math.sin(a), cy - r * R * Math.cos(a)];
+}
+
+function drawArray() {
+  if (!arrayCanvas) return;
+  const ctx = arrayCanvas.getContext("2d");
+  const W = arrayCanvas.width, H = arrayCanvas.height;
+  const fg = themeColor("fg"), bg = themeColor("bg"), dim = themeColor("dim");
+  const accent = themeColor("accent") || fg;
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+  const cx = W / 2, cy = H - 26, R = Math.min(W / 2, H - 40) - 14;
+  // dB rings (0/−10/−20/−30/−40) and 15° spokes, dim
+  ctx.strokeStyle = dim;
+  ctx.lineWidth = 1;
+  ctx.globalAlpha = 0.6;
+  for (const db of [0, -10, -20, -30, -40]) {
+    ctx.beginPath();
+    ctx.arc(cx, cy, (db / ARRAY_FLOOR_DB) * R, Math.PI, 2 * Math.PI);
+    ctx.stroke();
+  }
+  for (let deg = -90; deg <= 90; deg += 15) {
+    const [x, y] = arrayPolar(arrayCanvas, deg, 0, R);
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(x, y);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = dim;
+  ctx.font = "10px monospace";
+  ctx.fillText("0 dB", cx + 3, cy - R + 10);
+  ctx.fillText("−40", cx + 3, cy - 4);
+  ctx.fillText("0°", cx - 4, cy - R - 4);
+  ctx.fillText("−90°", cx - R + 2, cy - 12);
+  ctx.fillText("+90°", cx + R - 26, cy - 12);
+  if (!lastArray) return;
+  // guide rays: steered beam (accent) and first grating lobe (dim, dashed)
+  const guide = (deg, color) => {
+    const [x, y] = arrayPolar(arrayCanvas, deg, 0, R);
+    ctx.strokeStyle = color;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(x, y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  };
+  if (lastArray.steer_deg) guide(lastArray.steer_deg, accent);
+  const gl = lastArray.metrics?.grating_lobe_deg;
+  if (gl !== null && gl !== undefined) guide(gl, dim);
+  // traces: af_db dim, total_db fg
+  const trace = (key, color, width) => {
+    const th = lastArray.theta_deg, db = lastArray[key];
+    if (!th || !db) return;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.beginPath();
+    th.forEach((t, i) => {
+      const [x, y] = arrayPolar(arrayCanvas, t, db[i], R);
+      i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    });
+    ctx.stroke();
+  };
+  trace("af_db", dim, 1);
+  trace("total_db", fg, 2);
+}
+
+function syncArrayForm() {
+  const isLam = document.getElementById("ant-a-smode").value === "lambda";
+  document.getElementById("ant-a-dl").classList.toggle("hidden", !isLam);
+  document.getElementById("ant-a-dmm").classList.toggle("hidden", isLam);
+  const cheb = document.getElementById("ant-a-taper").value === "chebyshev";
+  document.getElementById("ant-a-sll").disabled = !cheb;
+}
+
+async function doArray() {
+  msg("designing array…");
+  try {
+    const body = {
+      n: parseInt(document.getElementById("ant-a-n").value, 10),
+      f_mhz: numVal("ant-a-f", 2450),
+      taper: document.getElementById("ant-a-taper").value,
+      sll_db: numVal("ant-a-sll", 30),
+      steer_deg: numVal("ant-a-steer", 0),
+      element: document.getElementById("ant-a-element").value,
+      medium: document.getElementById("ant-a-medium").value,
+    };
+    if (document.getElementById("ant-a-smode").value === "lambda") body.d_lambda = numVal("ant-a-dl", 0.5);
+    else body.d_mm = numVal("ant-a-dmm", 61);
+    lastArray = await api("/api/antenna/array", body);
+    drawArray();
+    const m = lastArray.metrics;
+    arrayStatsEl.replaceChildren(
+      statRow("hpbw_deg", m.hpbw_deg === null ? "—" : Number(m.hpbw_deg.toFixed(2))),
+      statRow("sll_db", m.sll_db === null ? "−∞ (no sidelobes)" : Number(m.sll_db.toFixed(2))),
+      statRow("grating_lobe_deg", m.grating_lobe_deg === null ? "—" : Number(m.grating_lobe_deg.toFixed(1))),
+      statRow("directivity_dbi", Number(m.directivity_dbi.toFixed(2))),
+      statRow("aperture_mm", lastArray.aperture_mm),
+      statRow("d_mm", Number(lastArray.d_mm.toFixed(2))),
+      statRow("d_lambda", Number(lastArray.d_lambda.toFixed(3)))
+    );
+    msg(`array: ${lastArray.notes}`, "ok");
+  } catch (e) {
+    msg(`array failed: ${e.message}`, "error");
   }
 }
 
@@ -1325,6 +1448,78 @@ export function init(container) {
   });
   drawSmith();
 
+  // ---- ARRAY panel
+  arrayCanvas = el("canvas", { class: "sim-canvas smith-canvas", width: "384", height: "300" });
+  panels.array = el(
+    "div",
+    {},
+    el(
+      "div",
+      { class: "panel" },
+      el("h2", {}, "Phased array"),
+      el("div", { class: "row" }, el("label", {}, "elements N"), el("input", { id: "ant-a-n", type: "number", value: "8", min: "1", max: "64", step: "1" })),
+      el("div", { class: "row" }, el("label", {}, "f MHz"), el("input", { id: "ant-a-f", type: "number", value: "2450", step: "1" })),
+      el(
+        "div",
+        { class: "row" },
+        el("label", {}, "spacing"),
+        el(
+          "select",
+          { id: "ant-a-smode" },
+          el("option", { value: "lambda" }, "D IN λ"),
+          el("option", { value: "mm" }, "D IN MM")
+        ),
+        el("input", { id: "ant-a-dl", type: "number", value: "0.5", min: "0.1", max: "2", step: "0.05" }),
+        el("input", { id: "ant-a-dmm", class: "hidden", type: "number", value: "61", min: "0.1", step: "0.5" })
+      ),
+      el(
+        "div",
+        { class: "row" },
+        el("label", {}, "taper"),
+        el(
+          "select",
+          { id: "ant-a-taper" },
+          el("option", { value: "uniform" }, "UNIFORM"),
+          el("option", { value: "binomial" }, "BINOMIAL"),
+          el("option", { value: "chebyshev" }, "CHEBYSHEV")
+        ),
+        el("input", { id: "ant-a-sll", type: "number", value: "30", min: "5", max: "80", step: "5", disabled: true })
+      ),
+      el("div", { class: "row" }, el("label", {}, "steer deg"), el("input", { id: "ant-a-steer", type: "number", value: "0", min: "-80", max: "80", step: "5" })),
+      el(
+        "div",
+        { class: "row" },
+        el("label", {}, "element"),
+        el(
+          "select",
+          { id: "ant-a-element" },
+          ...["dipole", "helix", "loop", "meander", "monopole", "patch", "pifa", "slot", "yagi"].map((k) =>
+            el("option", { value: k }, k.toUpperCase())
+          )
+        )
+      ),
+      el("div", { class: "row" }, el("label", {}, "medium"), mediumSelect("ant-a-medium")),
+      el("div", { class: "btn-row" }, el("button", { class: "btn", id: "ant-a-run" }, "Design")),
+      el("div", { class: "dim" }, "SLL dB applies to the CHEBYSHEV taper only")
+    ),
+    el(
+      "div",
+      { class: "panel" },
+      el("h2", {}, "Polar pattern (dB, floor −40)"),
+      el("div", { class: "panel-row" }, labeledCell("total (fg) + array factor (dim)", arrayCanvas)),
+      el("div", { class: "dim" }, "guides: dashed accent = steer, dashed dim = grating lobe")
+    ),
+    el(
+      "div",
+      { class: "panel" },
+      el("h2", {}, "Beam metrics"),
+      el("table", { class: "stats" }, (arrayStatsEl = el("tbody", {},
+        el("tr", {}, el("td", { class: "dim" }, "design an array to fill"))))
+      )
+    )
+  );
+  drawArray();
+
   const head = el(
     "div",
     { class: "panel" },
@@ -1354,6 +1549,9 @@ export function init(container) {
     drawKicadPreview();
   });
   document.getElementById("ant-s-run").addEventListener("click", doSmith);
+  document.getElementById("ant-a-run").addEventListener("click", doArray);
+  document.getElementById("ant-a-smode").addEventListener("change", syncArrayForm);
+  document.getElementById("ant-a-taper").addEventListener("change", syncArrayForm);
   document.getElementById("ant-f-run").addEventListener("click", doFields);
   fCancelBtn.addEventListener("click", doCancelFields);
   document.getElementById("ant-e-run").addEventListener("click", doEvolve);

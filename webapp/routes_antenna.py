@@ -8,6 +8,10 @@ Wraps the antenna half of the package (`em_physics`, `antenna_design`,
   computations — synchronous endpoints in the `routes_hoa` style, all
   payloads through `_jsafe`.  KiCad export uses a bounded in-memory
   token cache (one-shot per file) mirroring the `_WAV_CACHE` pattern.
+* ``POST /smith`` sweeps Z_in(f) → Γ(f) with `antenna_evo.wire_mom` (dipole
+  or explicit wire geometry); ``POST /array`` is a synchronous
+  `em_physics.design_array` wrapper (tapered/steered linear array,
+  pattern multiplication with the element pattern).
 * ``POST /fields`` runs `fdtd.fdtd_run` as a JobManager job: the solver
   callback becomes `report(job, ...)` frames whose |E| mid-plane slices
   (and the Stokes axial ratio when `pol_viz`) are heatmap PNGs, with
@@ -36,7 +40,13 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 from .. import antenna_design, antenna_evo, fdtd, kicad_gen, parts_db, site_survey
-from ..em_physics import MEDIA, build_dipole as em_build_dipole
+from ..em_physics import (
+    ANTENNA_TYPES,
+    MEDIA,
+    TAPERS,
+    build_dipole as em_build_dipole,
+    design_array,
+)
 from ._png import heatmap_png, write_png
 from .jobs import JOBS, Job, report
 from .routes_hadamard import _jsafe
@@ -567,6 +577,73 @@ def smith_sweep(req: SmithReq) -> dict:
         "f_center_mhz": f_c_hz / 1e6,
         "sweep": sweep,
     })
+
+
+# ---------------------------------------------------------------- array
+
+class ArrayReq(BaseModel):
+    n: int
+    f_mhz: float
+    d_mm: float | None = None      # exactly one of d_mm / d_lambda
+    d_lambda: float | None = None
+    taper: str = "uniform"
+    sll_db: float = 30.0           # only used by the chebyshev taper
+    steer_deg: float = 0.0
+    medium: str = "air"
+    element: str = "dipole"
+    n_theta: int = 361
+
+
+@router.post("/array")
+def array_design(req: ArrayReq) -> dict:
+    """Phased-array designer (`em_physics.design_array`) — pattern
+    multiplication of the array factor (uniform/binomial/Dolph–Chebyshev
+    taper, progressive-phase steering) with the chosen element pattern."""
+    if not (1 <= req.n <= 64):
+        raise HTTPException(status_code=400, detail="n must be 1..64")
+    if not (10.0 <= req.f_mhz <= F_MAX_MHZ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"f_mhz must be 10..{F_MAX_MHZ:g} MHz",
+        )
+    if (req.d_mm is None) == (req.d_lambda is None):
+        raise HTTPException(
+            status_code=400, detail="give exactly one of d_mm / d_lambda"
+        )
+    if req.d_mm is not None and not (0.1 <= req.d_mm <= 5000.0):
+        raise HTTPException(status_code=400, detail="d_mm must be 0.1..5000 mm")
+    if req.d_lambda is not None and not (0.1 <= req.d_lambda <= 2.0):
+        raise HTTPException(status_code=400, detail="d_lambda must be 0.1..2.0")
+    if req.taper not in TAPERS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown taper {req.taper!r}; expected one of {tuple(TAPERS)}",
+        )
+    if not (5.0 <= req.sll_db <= 80.0):
+        raise HTTPException(status_code=400, detail="sll_db must be 5..80 dB")
+    if not (-80.0 <= req.steer_deg <= 80.0):
+        raise HTTPException(status_code=400, detail="steer_deg must be −80..80°")
+    _check_medium(req.medium)
+    if req.element not in ANTENNA_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown element {req.element!r}; "
+                   f"expected one of {tuple(ANTENNA_TYPES)}",
+        )
+    n_theta = max(181, min(1441, req.n_theta))
+    try:
+        out = design_array(
+            req.n, req.f_mhz * 1e6,
+            d_mm=req.d_mm, d_lambda=req.d_lambda,
+            taper=req.taper, steer_deg=req.steer_deg, sll_db=req.sll_db,
+            medium=req.medium, element=req.element, n_theta=n_theta,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    m = out["metrics"]
+    if not math.isfinite(m["sll_db"]):  # binomial nulls: −∞ is not valid JSON
+        m["sll_db"] = None
+    return _jsafe({**out, "tapers": dict(TAPERS)})
 
 
 # ---------------------------------------------------------------- survey

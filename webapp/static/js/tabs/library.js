@@ -1,7 +1,12 @@
-// Library — construction-DAG map of all Hadamard orders (Phase 5b).
-// GET /api/dag?max=N → built/claimed/gap tiers, method glyphs, Kronecker
-// depths (from game_of_hadamard.classify_orders). Hand-rolled canvas
-// renderer: 16 cells per row, one cell per valid order (1, 2, 4k);
+// Library — construction-DAG map of all Hadamard orders (Phase 5b),
+// plus the DARPA-challenges program frame.
+//   MAP        the /api/dag construction map (below)
+//   CHALLENGES GET /api/challenges → DARPA's 23 mathematical challenges
+//              with this lab's honest tooling alignment (status tag +
+//              engine chips deep-linking via "hoa64:open-tab").
+// MAP: GET /api/dag?max=N → built/claimed/gap tiers, method glyphs,
+// Kronecker depths (from game_of_hadamard.classify_orders). Hand-rolled
+// canvas renderer: 16 cells per row, one cell per valid order (1, 2, 4k);
 // built = solid fg block, claimed = dim outline, gap = faint bracket.
 // Selecting a cell highlights its Kronecker relatives (×2/×4/×8
 // descendants, /2 ancestor chain through built orders) and offers deep
@@ -17,6 +22,15 @@ const LABEL_H = 15;
 const PAD = 8;
 const GAP_CHIPS = 20;
 
+const LAYERS = { map: "MAP", challenges: "CHALLENGES" };
+// status → theme css var (no new CSS: existing --accent/--fg/--dim/--faint)
+const STATUS_COLOR = {
+  active: "var(--accent)",
+  partial: "var(--fg)",
+  latent: "var(--dim)",
+  none: "var(--faint)",
+};
+
 let dagData = null; // last /api/dag response
 let detData = null; // last /api/detbounds response
 let orders = []; // valid orders [1, 2, 4, 8, ...] ≤ max
@@ -26,6 +40,10 @@ let selected = null;
 let relatives = new Set(); // Kronecker descendants/ancestors of `selected`
 let dagCanvas, detCanvas, msgEl, countsEl, selInfoEl, gapsEl;
 let openBtn, searchBtn;
+let layer = "map";
+let layerBtns = {};
+let mapWrap, chWrap, chStatusEl, chListEl;
+let chData = null; // last /api/challenges response
 
 function el(tag, attrs = {}, ...kids) {
   const n = document.createElement(tag);
@@ -294,12 +312,89 @@ function onTheme() {
   drawDet();
 }
 
+// ---- layers + DARPA challenges ---------------------------------------------
+
+function selectLayer(name) {
+  layer = name;
+  for (const [k, b] of Object.entries(layerBtns)) b.style.opacity = k === layer ? "1" : "0.45";
+  if (mapWrap) mapWrap.style.display = layer === "map" ? "" : "none";
+  if (chWrap) chWrap.style.display = layer === "challenges" ? "" : "none";
+  if (layer === "challenges") loadChallenges();
+}
+
+function engineChip(e) {
+  if (e.tab) {
+    const c = el("button", { class: "btn btn-xs", title: `open ${e.tab}` }, e.module);
+    c.addEventListener("click", () =>
+      window.dispatchEvent(new CustomEvent("hoa64:open-tab", { detail: { tab: e.tab } }))
+    );
+    return c;
+  }
+  return el("span", { class: "btn btn-xs", style: "opacity:0.5;cursor:default" }, e.module);
+}
+
+function challengeRow(ch, al) {
+  const color = STATUS_COLOR[al.status] || "var(--faint)";
+  const chips = (al.engines || []).map(engineChip);
+  return el(
+    "div",
+    { style: "margin-bottom:12px" },
+    el(
+      "div",
+      { class: "row" },
+      el("b", {}, `${ch.n}. ${ch.title}`),
+      el(
+        "span",
+        { class: "btn btn-xs", style: `color:${color};border-color:${color};cursor:default` },
+        al.status.toUpperCase()
+      )
+    ),
+    el("div", { class: "dim" }, ch.statement),
+    chips.length ? el("div", { class: "btn-row" }, ...chips) : "",
+    el("div", { class: "dim", style: "opacity:0.7;font-size:11px" }, al.note)
+  );
+}
+
+function renderChallenges() {
+  const s = chData.summary;
+  const byN = {};
+  for (const a of chData.alignment) byN[a.n] = a;
+  chStatusEl.textContent =
+    `active ${s.counts.active} · partial ${s.counts.partial} · latent ${s.counts.latent} · ` +
+    `none ${s.counts.none} — tooling alignment, not progress toward solutions`;
+  chListEl.replaceChildren(...chData.challenges.map((ch) => challengeRow(ch, byN[ch.n])));
+}
+
+async function loadChallenges() {
+  if (chData) return;
+  chStatusEl.textContent = "loading…";
+  try {
+    chData = await apiGet("/api/challenges");
+    renderChallenges();
+  } catch (e) {
+    chStatusEl.textContent = `challenges failed: ${e.message}`;
+  }
+}
+
 // ---- tab lifecycle --------------------------------------------------------------
 
 export function init(container) {
   dagData = detData = null;
   selected = null;
   relatives = new Set();
+  layerBtns = {};
+
+  const layerRow = el(
+    "div",
+    { class: "btn-row layer-select", id: "lib-layer-select" },
+    ...Object.entries(LAYERS).map(([name, label]) => {
+      const b = el("button", { class: "btn", "data-layer": name }, `[${label}]`);
+      b.addEventListener("click", () => selectLayer(name));
+      layerBtns[name] = b;
+      return b;
+    })
+  );
+  const headPanel = el("div", { class: "panel" }, el("h2", {}, "Library"), layerRow);
 
   const controlsPanel = el(
     "div",
@@ -342,14 +437,25 @@ export function init(container) {
   const mapPanel = el("div", { class: "panel" }, el("h2", {}, "Orders (16 per row)"), dagCanvas);
   const detPanel = el("div", { class: "panel" }, el("h2", {}, "Determinant vs Hadamard bound"), detCanvas);
 
-  container.replaceChildren(
+  chWrap = el(
+    "div",
+    { style: "display:none" },
     el(
       "div",
-      { class: "lab" },
-      el("div", {}, controlsPanel, selPanel, gapsPanel),
-      el("div", {}, detPanel, mapPanel)
+      { class: "panel" },
+      el("h2", {}, "DARPA's 23 mathematical challenges (2007)"),
+      (chStatusEl = el("div", { class: "status-line" }, "—")),
+      (chListEl = el("div", {}, el("div", { class: "dim" }, "loading…")))
     )
   );
+  mapWrap = el(
+    "div",
+    { class: "lab" },
+    el("div", {}, controlsPanel, selPanel, gapsPanel),
+    el("div", {}, detPanel, mapPanel)
+  );
+  container.replaceChildren(el("div", {}, headPanel, mapWrap, chWrap));
+  selectLayer("map");
 
   dagCanvas.addEventListener("click", onDagClick);
   document.getElementById("lib-load").addEventListener("click", doLoad);

@@ -18,16 +18,16 @@ from hoa64.rh import rh_check
 OUT = Path.home() / "open_hadamard"
 
 
-def load_known(max_n=4000):
-    """Return set of orders for which we have a verified matrix."""
+def load_known(max_n=None):
+    """Return set of orders for which we have a CSV (no ceiling by default)."""
     known = set()
     for p in sorted(OUT.glob("hadamard_*.csv")):
         try:
             order = int(p.stem.replace("hadamard_", ""))
-            if order <= max_n:
-                known.add(order)
         except ValueError:
             continue
+        if max_n is None or order <= max_n:
+            known.add(order)
     return known
 
 
@@ -100,8 +100,10 @@ def main():
     except Exception as e:
         print(f"RNN not available: {e}", flush=True)
 
-    max_scan = 4000
-    known = load_known(max_scan)
+    # start at the highest known CSV and advance without an upper bound —
+    # there is no hard order limit; large orders just take longer.
+    known = load_known()
+    max_scan = max(known | {4000})
     print(f"Loaded {len(known)} known orders from CSV", flush=True)
 
     # seed cache

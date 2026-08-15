@@ -12,6 +12,7 @@ const LAYERS = { cloth: "CLOTH", touchpad: "TOUCH", metamaterial: "META" };
 let msgEl, layerBtns = {}, panels = {};
 let layer = "cloth";
 let last = null;
+let lastKicadPreviewBoard = null, kicadPreviewMode = "footprint";
 let previewCanvas;
 
 function el(tag, attrs = {}, ...kids) {
@@ -139,7 +140,18 @@ function renderKey(key) {
 
 function drawPreview() {
   if (!previewCanvas) return;
-  drawKicadPrims(previewCanvas, last && last.preview, { empty: "generate a layout" });
+  const prev = (kicadPreviewMode === "board" && lastKicadPreviewBoard)
+    ? lastKicadPreviewBoard : (last && last.preview);
+  drawKicadPrims(previewCanvas, prev, { empty: "generate a layout" });
+}
+
+function syncKicadPreviewBtns() {
+  const row = document.getElementById("mat-prev-toggle");
+  if (row) row.classList.toggle("hidden", !lastKicadPreviewBoard);
+  const fpBtn = document.getElementById("mat-prev-fp");
+  if (fpBtn) fpBtn.style.opacity = kicadPreviewMode === "footprint" ? "1" : "0.45";
+  const boardBtn = document.getElementById("mat-prev-board");
+  if (boardBtn) boardBtn.style.opacity = kicadPreviewMode === "board" ? "1" : "0.45";
 }
 
 async function doDesign() {
@@ -147,6 +159,9 @@ async function doDesign() {
   try {
     const d = await api("/api/materials/design", body());
     last = d;
+    lastKicadPreviewBoard = null;
+    kicadPreviewMode = "footprint";
+    syncKicadPreviewBtns();
     renderStats(d);
     drawPreview();
     const s = d.stats || {};
@@ -163,8 +178,11 @@ async function doKicad() {
   try {
     const d = await api("/api/materials/kicad", body());
     last = { ...(last || {}), preview: d.preview, stats: d.stats, tiles: d.tiles, key: d.key };
+    lastKicadPreviewBoard = d.preview_board || null;
+    kicadPreviewMode = lastKicadPreviewBoard ? "board" : "footprint";
     renderStats(last);
     drawPreview();
+    syncKicadPreviewBtns();
     const host = document.getElementById("mat-files");
     host.replaceChildren(
       ...(d.files || []).map((name) =>
@@ -222,8 +240,11 @@ export function init(container) {
   );
   const view = el("div", { class: "panel" },
     el("h2", {}, "Layout"),
+    el("div", { class: "btn-row hidden", id: "mat-prev-toggle" },
+      el("button", { class: "btn", id: "mat-prev-fp" }, "[FOOTPRINT]"),
+      el("button", { class: "btn", id: "mat-prev-board" }, "[BOARD]")),
     el("div", { class: "panel-row" },
-      el("div", { class: "sim-cell" }, el("div", { class: "sim-label" }, "flux tile (fill) on 2-layer copper"), previewCanvas)),
+      el("div", { class: "sim-cell" }, el("div", { class: "sim-label" }, "2-layer copper — red F.Cu / blue B.Cu (no B.Cu pour)"), previewCanvas)),
     el("h2", {}, "Map key"),
     el("div", { id: "mat-key" }, el("div", { class: "dim" }, "generate to fill"))
   );
@@ -243,6 +264,18 @@ export function init(container) {
   selectLayer("cloth");
   document.getElementById("mat-run").addEventListener("click", doDesign);
   document.getElementById("mat-kicad").addEventListener("click", doKicad);
+  document.getElementById("mat-prev-fp").addEventListener("click", () => {
+    kicadPreviewMode = "footprint";
+    syncKicadPreviewBtns();
+    drawPreview();
+  });
+  document.getElementById("mat-prev-board").addEventListener("click", () => {
+    if (!lastKicadPreviewBoard) return;
+    kicadPreviewMode = "board";
+    syncKicadPreviewBtns();
+    drawPreview();
+  });
+  syncKicadPreviewBtns();
   drawPreview();
   window.addEventListener("themechange", onThemechange);
 }

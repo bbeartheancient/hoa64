@@ -120,6 +120,7 @@ async function finishTrain() {
     if (r.epochs_ran !== undefined) rows.push(statRow("epochs_ran", r.epochs_ran));
     if (Array.isArray(r.skipped) && r.skipped.length)
       rows.push(statRow("skipped", r.skipped.join(", "), "bad"));
+    if (r.optimizer) rows.push(statRow("optimizer", r.optimizer));
     if (r.out_path) rows.push(statRow("out_path", r.out_path, "dim"));
     tStatsEl.replaceChildren(...rows);
     msg(
@@ -142,6 +143,7 @@ async function doTrain() {
     batch_size: parseInt(document.getElementById("noi-t-batch").value, 10),
     max_windows_per_class: winRaw === "" ? null : parseInt(winRaw, 10),
     budget_s: numVal("noi-t-budget", 1800),
+    optimizer: document.getElementById("noi-t-opt").value,
   };
   if (ws) ws.close();
   tChart.clear();
@@ -175,10 +177,27 @@ async function refreshClasses() {
   try {
     const d = await api("/api/noise/classes");
     const m = d.model || {};
+    const synth = new Set(d.synth_classes || []);
+    const nRec = (d.recorded_classes || []).length;
+    const nSyn = synth.size;
     modelStatusEl.textContent = m.trained
       ? `model trained — ${m.path}`
       : "no trained model — train a model first";
     modelStatusEl.className = m.trained ? "status-line good" : "status-line dim";
+    const host = document.getElementById("noi-class-list");
+    if (host) {
+      host.replaceChildren(
+        el("div", { class: "dim" },
+          `${(d.classes || []).length} labels · ${nRec} NOISEX-92 · ${nSyn} RF synth (baseband envelope, not the carrier)`),
+        el("div", { class: "btn-row" },
+          ...(d.classes || []).map((name) =>
+            el("span", {
+              class: "btn btn-xs",
+              style: synth.has(name) ? "opacity:1" : "opacity:0.6;cursor:default",
+              title: synth.has(name) ? "synthesized RF baseband" : "NOISEX-92 recording",
+            }, synth.has(name) ? `${name}*` : name)))
+      );
+    }
   } catch (e) {
     modelStatusEl.textContent = `classes fetch failed: ${e.message}`;
     modelStatusEl.className = "status-line bad";
@@ -288,6 +307,10 @@ export function init(container) {
     el("div", { class: "row" }, el("label", {}, "batch size"), el("input", { id: "noi-t-batch", type: "number", value: "64", min: "8", max: "512", step: "8" })),
     el("div", { class: "row" }, el("label", {}, "max windows/class"), el("input", { id: "noi-t-windows", type: "number", placeholder: "(all)", min: "16", max: "5000" })),
     el("div", { class: "row" }, el("label", {}, "budget s"), el("input", { id: "noi-t-budget", type: "number", value: "1800", min: "10" })),
+    el("div", { class: "row" }, el("label", {}, "optimizer"),
+      el("select", { id: "noi-t-opt" },
+        el("option", { value: "muon", selected: "selected" }, "MUON (Dion3)"),
+        el("option", { value: "adamw" }, "ADAMW"))),
     el(
       "div",
       { class: "btn-row" },
@@ -322,7 +345,7 @@ export function init(container) {
       el("input", { id: "noi-a-live", type: "number", value: "3", min: "0.5", max: "30", step: "0.5" }),
       el("button", { class: "btn", id: "noi-a-capture" }, "Capture")
     ),
-    el("div", { class: "dim" }, "needs a trained model — train a model first"),
+    el("div", { class: "dim" }, "needs a trained model — * labels are synthesized RF baseband (BLE/WiFi/Zigbee/LoRa envelopes), not the carrier"),
     el("div", { class: "panel-row" }, melCell),
     (barsHost = el("div", {}, el("div", { class: "dim" }, "no analysis yet")))
   );
@@ -339,7 +362,8 @@ export function init(container) {
           { class: "panel" },
           el("h2", {}, "NOISE LAB"),
           (modelStatusEl = el("div", { class: "status-line dim" }, "checking model…")),
-          (msgEl = el("div", { class: "msg" }))
+          (msgEl = el("div", { class: "msg" })),
+          el("div", { id: "noi-class-list" }, el("div", { class: "dim" }, "loading classes…"))
         ),
         trainPanel
       ),

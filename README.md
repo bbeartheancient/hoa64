@@ -95,12 +95,14 @@ python3 -m hoa64.cli webapp
 | `parts_db.py` | Curated off‑the‑shelf antenna parts DB + matcher *(alpha — 57 catalog rows)* |
 | `fdtd.py` | 3‑D Yee FDTD Maxwell solver (air/water, polarization) *(alpha)* |
 | `antenna_evo.py` | Thin‑wire MoM evaluator + Hadamard‑seeded topology SA *(alpha)* |
-| `kicad_gen.py` | Procedural KiCad 7 footprints/boards for PCB antennas and RF filters *(alpha)* |
+| `kicad_gen.py` | Procedural KiCad 7 footprints/boards for PCB antennas, RF filters, and 2-layer materials *(alpha)* |
 | `rf_filter.py` | PCB RF-filter synthesis (Butterworth/Chebyshev LPF/HPF/hairpin/stub) + ABCD S-params + Hadamard SA; lumped LC/RC/CRC export planned *(alpha)* |
 | `materials.py` | H.8 flux-tile homes: conductive cloth, mutual-cap touchpad, spin-ice/metamaterial cell *(alpha)* |
 | `site_survey.py` | SRTM virtual site survey: tight DEM window, path profile, 4/3‑earth Fresnel/Deygout, radio horizon, Esri satellite mosaic *(alpha)* |
-| `noise_data.py` | NOISEX‑92 noise database access + log‑mel DSP *(alpha)* |
-| `dit_noise.py` | DiT‑backbone noise classifier (adaLN‑Zero, lazy torch) *(alpha)* |
+| `noise_data.py` | NOISEX‑92 access + 4 synthesized RF baseband classes (BLE/WiFi/Zigbee/LoRa) + log‑mel DSP *(alpha)* |
+| `dit_noise.py` | DiT‑backbone noise classifier (adaLN‑Zero, Muon/AdamW, lazy torch) *(alpha)* |
+| `muon.py` | Muon/Dion3 optimizer: Newton–Schulz polar factor of momentum *(alpha)* |
+| `darpa_challenges.py` | DARPA's 23 mathematical challenges + honest tooling alignment |
 | `webapp/` | FastAPI + vanilla‑JS web GUI (see Webapp below) |
 | `rh.py` | RH |Δₙ| bound checker |
 
@@ -168,7 +170,10 @@ Tabs:
 - **Materials** — three homes for the same catalog. CLOTH is a two‑layer
   yarn (+ face / − reverse, walls are cuts). TOUCH is a mutual‑cap
   pad (each wall bond is a capacitor). META is a spin‑ice unit cell
-  (the H.8 atom) plus the Walsh tile lattice. All three export KiCad.
+  (the H.8 atom) plus the Walsh tile lattice. All three export KiCad
+  as 2‑layer F.Cu/B.Cu pads (no B.Cu GND pour — that would short the
+  reverse layer). After export, `[FOOTPRINT]` / `[BOARD]` toggles the
+  preview between the layout and the generated `.kicad_pcb`.
 - **HOA Studio** — speaker‑array designer, scene encode/rotate/analyze
 - **Terrain** — `[GENERATE]` / `[SURVEY]` sidebar switch.
   GENERATE is the Hadamard‑layered fBm heightfield with per‑octave
@@ -181,7 +186,12 @@ Tabs:
   blocked due‑east path. Radio horizon and suggested mast heights
   land in the link‑budget table.
 - **Orbitals** — hydrogenic |ψ|² point cloud (3D / XZ splat / both)
-- **Library** — construction‑DAG classification and achieved‑vs‑bound chart
+- **Library** — `[MAP]` construction‑DAG classification and
+  achieved‑vs‑bound chart; `[CHALLENGES]` is DARPA's 23 mathematical
+  challenges (2007) with this lab's honest tooling alignment
+  (`active` / `partial` / `latent` / `none` — statuses are *not*
+  progress toward solutions). Engine chips deep‑link into the tab
+  that implements them.
 - **Antenna** *(ALPHA — needs extensive field testing)* — physics‑based
   antenna lab: DESIGN ranks optimal
   constructions by band + site conditions (exact antenna theory — dipole,
@@ -209,11 +219,14 @@ Tabs:
   **Now:** distributed microstrip copper. **Next:** lumped output
   forms from the same prototype (LC ladder, RC, CRC/π, and similar
   discrete networks) — not implemented yet.
-- **Noise** *(ALPHA — window‑level split over 15 long recordings; needs a
-  larger database before real‑world generalization claims)* — DiT‑backbone
-  noise classifier: train on the NOISEX‑92
-  database (live loss/accuracy chart), then classify WAV files or live
-  mic captures with a log‑mel spectrogram + class‑probability bars
+- **Noise** *(ALPHA — window‑level split over 15 long recordings + 4
+  synthesized RF envelopes; needs a larger database before real‑world
+  generalization claims)* — DiT‑backbone noise classifier: train on
+  NOISEX‑92 plus synthesized BLE/WiFi/Zigbee/LoRa *baseband envelopes*
+  (cadence/duty/spectral shape at 19.98 kHz — not the RF carrier) with
+  a Muon (Dion3) or AdamW optimizer and a live loss/accuracy chart,
+  then classify WAV files or live mic captures with a log‑mel
+  spectrogram + class‑probability bars
 
 Seven retro‑monitor themes (MONO, P1, AMB, PLS, DMG, CGB, VGA — VGA with
 four subthemes). `[SET]` opens a centered popup overlay (outside `#app`

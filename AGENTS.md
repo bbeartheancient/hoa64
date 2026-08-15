@@ -79,7 +79,9 @@ channel count, and FOA is a normalized H4.
   `{category, name, colors}` per file, 5-min cache), `routes_library.py`
   (Phase 5b: /api/dag
   construction-DAG classification + /api/detbounds achieved-vs-bound,
-  both cached/threaded), `routes_antenna.py` (antenna lab under
+  both cached/threaded), `routes_challenges.py` (GET /api/challenges —
+  DARPA's 23 mathematical challenges + this lab's honest tooling
+  alignment; consumed by Library's CHALLENGES layer), `routes_antenna.py` (antenna lab under
   /api/antenna: sync /design recommender + /parts matcher (full-cover
   first, then overlap fallback so a 2400–5800 query still lists every
   in-range row; dual-band SKUs are one row per lobe) + /kicad
@@ -87,6 +89,8 @@ channel count, and FOA is a normalized H4.
   lists installed RF_Antenna.pretty; response carries preview prims +
   JLCPCB design_params; bounded one-shot-per-file token cache] +
   /smith MoM Z_in(f)→Γ(f) sweep [dipole or explicit wire geometry] +
+  /array sync phased-array designer [design_array; tapers/steering/
+  grating-lobe metrics; non-finite SLL normalized to null] +
   /survey + /survey/map (SRTM DEM + Esri imagery; used by the Terrain
   tab, not an Antenna panel),
   job-based /fields FDTD lab and /evolve Hadamard-seeded topology SA —
@@ -103,9 +107,13 @@ channel count, and FOA is a normalized H4.
   job-based /evolve Hadamard SA on section
   lengths/widths, distributed topos only), `routes_materials.py`
   (cloth/touchpad/
-  metamaterial from H.8 flux tiles + /kicad), `routes_noise.py` (/api/noise: /classes model status,
-  /train DiT job, /analyze WAV-path or live-mic classify → mel PNG +
-  probs), `routes_mcu.py` (/api/mcu Microcontroller lab: /firmware LED
+  metamaterial from H.8 flux tiles + /kicad; materials boards skip the
+  B.Cu GND pour so reverse-layer cells stay discrete, and the response
+  carries `preview_board` for the FOOTPRINT/BOARD toggle),
+  `routes_noise.py` (/api/noise: /classes lists 19 labels — 15 NOISEX-92
+  + 4 synthesized RF baseband envelopes ble/wifi/zigbee/lora —
+  /train DiT job with muon|adamw, /analyze WAV-path or live-mic
+  classify → mel PNG + probs), `routes_mcu.py` (/api/mcu Microcontroller lab: /firmware LED
   matrix (ESP32/Teensy Arduino + CircuitPython) and ESP-NOW mesh node
   sketches via one-shot token downloads, /push GRB frame → device HTTP
   POST (bare-host validated, trusted-local), /mesh/collect gateway RSSI
@@ -192,7 +200,9 @@ channel count, and FOA is a normalized H4.
   Materials (`js/tabs/materials.js` — `#mat-layer-select` CLOTH/TOUCH/META:
   two-layer yarn, mutual-cap electrodes, spin-ice unit cell + Walsh
   lattice from `materials.py`; gap_frac and flux-tile size (4/8/16) are
-  exposed in the Source panel; KiCad export via design_type=materials),
+  exposed in the Source panel; KiCad export via design_type=materials,
+  FOOTPRINT/BOARD preview toggle after export — board preview is the
+  generated `.kicad_pcb` with discrete B.Cu pads, no GND pour),
   Filter (`js/tabs/filter.js` — `#flt-layer-select` DESIGN/EVOLVE/KICAD:
   per-kind TOPOLOGY select (stepped-Z LPF, gap+stub HPF, hairpin BPF,
   open-stub BSF + lumped lc/dc_lc/c_shunt/qw_tl/rc/crc/rl); S21/S11
@@ -200,7 +210,7 @@ channel count, and FOA is a normalized H4.
   preview + one-shot download incl. `.kicad_block` design-block zip for
   lumped; SA streams IL/RL/rejection and is gated to distributed topos),
   Antenna (`js/tabs/antenna.js` — `#ant-layer-select` DESIGN/PARTS/
-  FIELDS/EVOLVE/KICAD/SMITH panels; FIELDS/EVOLVE stream job frames over
+  FIELDS/EVOLVE/KICAD/SMITH/ARRAY panels; FIELDS/EVOLVE stream job frames over
   `/ws/job/{id}`, DESIGN auto-fires the parts query and exposes one-shot
   KiCad downloads, PARTS formats `size_mm` as L×W×H (arrays must not be
   passed to `el()` — that threw and painted an empty table) and shows
@@ -211,14 +221,21 @@ channel count, and FOA is a normalized H4.
   table, and per-file download links — LIBRARY scales
   `RF_Antenna.pretty`, EVOLVE has WIRE/PCB topology plus Export KiCad,
   SMITH renders the MoM Z_in sweep on an interactive Γ plane with hover
-  readout;
+  readout; ARRAY is the phased-array designer (themed polar plot of
+  total_db over af_db at a −40 dB floor, steer/grating-lobe guide rays,
+  beam-metrics stat table);
   site survey lives on the Terrain tab (`[GENERATE]`/`[SURVEY]`);
   job results keep long payloads
   (pattern_png_b64/resonance_note/points) OUT of the DOM — whitelist
   stat rows + [RESULT JSON] blob download; viz canvases capped via
-  `.ant-cap` in app.css), Noise (`js/tabs/noise.js` — DiT classifier
-  training with a loss/acc strip chart + WAV/live-mic analysis with mel
-  spectrogram and class-probability bars), Microcontroller
+  `.ant-cap` in app.css), Library (`js/tabs/library.js` —
+  `#lib-layer-select` MAP/CHALLENGES: MAP is the construction-DAG +
+  det-bound chart; CHALLENGES is DARPA's 23 mathematical challenges
+  with per-challenge status/engine chips that deep-link via
+  `hoa64:open-tab`), Noise (`js/tabs/noise.js` — DiT classifier
+  training with a loss/acc strip chart, muon|adamw selector, 19-class
+  chip list (* = synthesized RF baseband), + WAV/live-mic analysis
+  with mel spectrogram and class-probability bars), Microcontroller
   (`js/tabs/microcontroller.js` — `#mcu-layer-select` LED/MESH/EDGE:
   LED paints WS2812 frames (serpentine GRB) and downloads
   ESP32/Teensy/CircuitPython firmware or pushes frames to a device IP;
@@ -274,7 +291,12 @@ channel count, and FOA is a normalized H4.
   monopole, loop, patch, helix, yagi, slot, pifa/meander — each
   returning dimensions/Z/gain/BW + a vectorized normalized
   `pattern(theta, phi)`, and `stokes(ex, ey)` polarization
-  analysis; all dimensions key off the medium wavelength).
+  analysis; all dimensions key off the medium wavelength) — plus the
+  phased-array API: `array_taper` (uniform/binomial/Dolph–Chebyshev at a
+  given SLL, `TAPERS` registry), `array_factor` (progressive-phase
+  steering), `array_metrics` (HPBW / SLL / grating-lobe angle / taper-
+  efficiency directivity), and `design_array` (pattern multiplication with
+  the element pattern, θ/af_db/total_db grids + layout).
 - Antenna-lab modules (ALPHA BUILD — needs extensive field testing and a
   larger parts database; library style with selftests, all physics-based —
   no heuristics): `antenna_design.py` (`SiteConditions` + `recommend` —
@@ -306,7 +328,11 @@ channel count, and FOA is a normalized H4.
   bases and evolved walks; JLCPCB design_params + s-expr preview
   prims (`layer` prefers a real *.Cu token; `fill` is captured so
   silk/Edge.Cuts stay `none`); Wheeler/Hammerstad 50 Ω feedline, 6h ground, keep-out under
-  the radiator; also `footprint_filter` / `design_type="filter"` for
+  the radiator; `footprint_from_layout` honors a per-rect `layer` so
+  materials boards emit F.Cu/B.Cu pads (silk is `fp_rect`, never a
+  pad); `board_from_footprint(..., gnd_pour=False)` for
+  `design_type="materials"` — a full-board B.Cu pour would short the
+  reverse-layer cells; also `footprint_filter` / `design_type="filter"` for
   stepped/hairpin/stub RF filters from `rf_filter.layout_mm` plus
   `schematic_lumped`/`design_block_lumped` — KiCad ≥8 `.kicad_block`
   folders (embedded-lib_symbols `.kicad_sch` + block.json + board + zip)
@@ -334,15 +360,28 @@ channel count, and FOA is a normalized H4.
   + first-Fresnel geometry, Deygout knife-edge diffraction,
   `em_physics.link_budget` closure → verdict; coincident/blank RX
   probes eight 400 m bearings and keeps the clearest hop),
-  `noise_data.py` (NOISEX-92 noise DB — 15 classes of .mat from
-  spib.linse.ufsc.br, cached to ~/.cache/hoa64/noisex92; HTK log-mel
-  DSP with fixed dB normalization),
+  `noise_data.py` (NOISEX-92 noise DB — 15 recorded .mat from
+  spib.linse.ufsc.br, cached to ~/.cache/hoa64/noisex92, plus 4
+  synthesized RF baseband envelopes `ble`/`wifi`/`zigbee`/`lora`
+  (`SYNTH_CLASSES`; cadence/duty/spectral envelope at fs=19.98 kHz,
+  not the RF carrier); HTK log-mel DSP with fixed dB normalization;
+  `load_noise` dispatches synth classes locally, `download` refuses them),
   `dit_noise.py` (ALPHA BUILD — DiT-backbone noise classifier, Peebles & Xie
   adaLN-Zero blocks used discriminatively, lazy torch, `train_model`
   job-friendly with callback/stop_flag, checkpoint `dit_noise.pt`;
-  window-level train/val split over 15 long recordings means val_acc≈1
-  reflects within-recording familiarity — needs a larger database and
-  unseen-source testing before generalization claims).
+  default optimizer is `muon.Muon` (AdamW fallback on 1-D params);
+  window-level train/val split over 15 long recordings + 4 synth
+  classes means val_acc≈1 reflects within-recording familiarity —
+  needs a larger database and unseen-source testing before
+  generalization claims).
+- Program-frame / optimizer modules: `darpa_challenges.py` (the 23
+  DARPA mathematical challenges + honest tooling alignment —
+  `active`/`partial`/`latent`/`none`; statuses are *not* progress
+  toward solutions; `rh.py` is the single `active` anchor),
+  `muon.py` (Muon/Dion3 optimizer: cursed-quintic Newton–Schulz
+  orthogonalization of the momentum matrix — S′ ∈ ~[0.5, 1.5], not
+  exact U Vᵀ — optional Gram-NS + row-subsampled orthogonalization,
+  AdamW fallback on ndim<2; lazy torch factory).
 - Microcontroller-lab module (ALPHA — firmware is template-generated and
   hardware-tested only by the user): `mcu.py` — WS2812 GRB frame packing
   (`pack_frame`/`pack_frames`, serpentine remap), `led_firmware`
