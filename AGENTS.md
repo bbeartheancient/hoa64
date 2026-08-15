@@ -95,7 +95,8 @@ channel count, and FOA is a normalized H4.
   sync /design Butterworth/Chebyshev LPF/HPF/BPF/BSF + S21/S11 sweep +
   /kicad footprint/board, job-based /evolve Hadamard SA on section
   lengths/widths; lumped LC/RC/CRC export from the same g-values is
-  planned, not shipped), `routes_noise.py` (/api/noise: /classes model status,
+  planned, not shipped), `routes_materials.py` (cloth/touchpad/
+  metamaterial from H.8 flux tiles + /kicad), `routes_noise.py` (/api/noise: /classes model status,
   /train DiT job, /analyze WAV-path or live-mic classify → mel PNG +
   probs), `static/vendor/`
   (pinned three.js 0.170.0 + OrbitControls, import map in index.html),
@@ -170,6 +171,9 @@ channel count, and FOA is a normalized H4.
   bounded `job.history` replay buffer, `job.matrix` holds verified results
   off-JSON), `static/` (no-build ES-module frontend; tabs: Matrix Lab,
   Search Studio, Micromag Sim, HOA Studio, Terrain, Orbitals, Library,
+  Materials (`js/tabs/materials.js` — `#mat-layer-select` CLOTH/TOUCH/META:
+  two-layer yarn, mutual-cap electrodes, spin-ice unit cell + Walsh
+  lattice from `materials.py`; KiCad export via design_type=materials),
   Filter (`js/tabs/filter.js` — `#flt-layer-select` DESIGN/EVOLVE/KICAD:
   stepped-Z LPF, gap+stub HPF, hairpin BPF, open-stub BSF; S21/S11
   canvas; KiCad preview + one-shot download; SA streams IL/RL/rejection;
@@ -276,6 +280,9 @@ channel count, and FOA is a normalized H4.
   the radiator; also `footprint_filter` / `design_type="filter"` for
   stepped/hairpin/stub RF filters from `rf_filter.layout_mm`; S-expr
   parser validity gate + `kicad-cli pcb upgrade` check when available),
+  `materials.py` (cloth/touchpad/metamaterial layouts from
+  `flux_tiles`; open-sheet 4-connected electrodes, wall-bond
+  capacitors, H.8 spin-ice unit cell + Walsh lattice),
   `rf_filter.py` (PCB RF-filter physics: Butterworth/Chebyshev g-values,
   Wheeler microstrip, ABCD cascade S-params with tanδ+Rs loss, Marki
   IL≈4.343 Σg/(Δ Q_u), everythingRF digest targets RL≥10 dB and
@@ -307,8 +314,8 @@ channel count, and FOA is a normalized H4.
   four 8×8 wall tiles at every dyadic scale, Walsh placement so
   H.256 counts 341/171/171/341 and top-left = H.128; Paley does
   not tile; orders ≡ 4 mod 8 cannot; open uses noted in
-  `flux_tiles` docstring — SA prior / cloth-touchpad weave /
-  metamaterial cell, not built),
+  `flux_tiles` docstring; `lam_tile` SA prior is live;
+  cloth/touch/meta live in the Materials tab),
   optional
   `goal`/`lam_goal` attraction — E_goal = lam_goal per entry disagreeing
   with ±goal, sign fixed at start since global sign is gauge), `tile_search.py` (2×2 H2-cell SA),

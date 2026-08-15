@@ -60,6 +60,7 @@ python3 -m hoa64.cli webapp
 | `antenna_evo.py` | Thin‑wire MoM evaluator + Hadamard‑seeded topology SA *(alpha)* |
 | `kicad_gen.py` | Procedural KiCad 7 footprints/boards for PCB antennas and RF filters *(alpha)* |
 | `rf_filter.py` | PCB RF-filter synthesis (Butterworth/Chebyshev LPF/HPF/hairpin/stub) + ABCD S-params + Hadamard SA; lumped LC/RC/CRC export planned *(alpha)* |
+| `materials.py` | H.8 flux-tile homes: conductive cloth, mutual-cap touchpad, spin-ice/metamaterial cell *(alpha)* |
 | `site_survey.py` | SRTM virtual site survey: tight DEM window, path profile, 4/3‑earth Fresnel/Deygout, radio horizon, Esri satellite mosaic *(alpha)* |
 | `noise_data.py` | NOISEX‑92 noise database access + log‑mel DSP *(alpha)* |
 | `dit_noise.py` | DiT‑backbone noise classifier (adaLN‑Zero, lazy torch) *(alpha)* |
@@ -126,9 +127,11 @@ Tabs:
   (4 unique 16×16 / 32×32 / … tiles); the large‑order “variation” is
   Walsh *placement* (H.256 tile counts 341/171/171/341, nested
   top‑left = H.128). Paley/generic library matrices do not tile.
-  Open (not built): SA prior, conductive‑cloth / touchpad electrode
-  weave, metamaterial unit cell — the catalog is not a named object
-  in the Walsh literature that we can find.
+  Search prior: `lam_tile` rewards H.8 (or H.4) tessellation.
+- **Materials** — three homes for the same catalog. CLOTH is a two‑layer
+  yarn (+ face / − reverse, walls are cuts). TOUCH is a mutual‑cap
+  pad (each wall bond is a capacitor). META is a spin‑ice unit cell
+  (the H.8 atom) plus the Walsh tile lattice. All three export KiCad.
 - **HOA Studio** — speaker‑array designer, scene encode/rotate/analyze
 - **Terrain** — `[GENERATE]` / `[SURVEY]` sidebar switch.
   GENERATE is the Hadamard‑layered fBm heightfield with per‑octave

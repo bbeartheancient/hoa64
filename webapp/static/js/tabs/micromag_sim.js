@@ -5,7 +5,7 @@
 //   {matrix_png_b64}  throttled ±1 preview
 //   {field_png_b64, grad_png_b64, flux_png_b64}  site-energy / |dF| / wall-density
 //   {"type":"end"}  terminal
-// Live retune: {"op":"set",cooling,lam_ex,lam_ani,lam_goal} → job.params["live"].
+// Live retune: {"op":"set",cooling,lam_ex,lam_ani,lam_goal,lam_tile} → job.params["live"].
 // Unified visualizers (Item 4): ONE matrix canvas + ONE field canvas with a
 // [MATRIX][ENERGY][GRAD][FLUX] layer selector. Each WS PNG is cached
 // pristine (server-green) per layer; the visible field canvas composites the
@@ -301,6 +301,7 @@ function handleFrame(d) {
         E_exch: d.E_exch,
         E_anis: d.E_anis,
         E_goal: d.E_goal,
+        E_tile: d.E_tile,
         T: d.T,
       });
     }
@@ -437,6 +438,7 @@ async function doStart() {
     body.goal_order = g;
     body.lam_goal = numVal("sim-lam-goal", 0.5);
   }
+  body.lam_tile = numVal("sim-lam-tile", 0);
 
   if (ws) ws.close();
   resetRun();
@@ -482,6 +484,7 @@ function sendTune() {
     lam_ex: parseFloat(document.getElementById("tune-lam-ex").value),
     lam_ani: parseFloat(document.getElementById("tune-lam-ani").value),
     lam_goal: parseFloat(document.getElementById("tune-lam-goal").value),
+    lam_tile: parseFloat(document.getElementById("tune-lam-tile").value),
   });
 }
 
@@ -538,6 +541,7 @@ export function init(container) {
       el("span", { class: "dim" }, "[EVOLVE TO LIBRARY GOAL]")
     ),
     el("div", { class: "row" }, el("label", {}, "lam_goal"), el("input", { id: "sim-lam-goal", type: "number", value: "0.5", step: "0.1", min: "0" })),
+    el("div", { class: "row" }, el("label", {}, "lam_tile"), el("input", { id: "sim-lam-tile", type: "number", value: "0", step: "0.1", min: "0" })),
     el(
       "div",
       { class: "btn-row" },
@@ -556,7 +560,8 @@ export function init(container) {
     slider("tune-cooling", "cooling", "0.99", "0.99999", "0.00001", "0.999"),
     slider("tune-lam-ex", "lam_ex", "0", "1", "0.01", "0"),
     slider("tune-lam-ani", "lam_ani", "0", "1", "0.01", "0"),
-    slider("tune-lam-goal", "lam_goal", "0", "5", "0.05", "0.5")
+    slider("tune-lam-goal", "lam_goal", "0", "5", "0.05", "0.5"),
+    slider("tune-lam-tile", "lam_tile", "0", "5", "0.05", "0")
   );
 
   const statusPanel = el(
@@ -573,7 +578,7 @@ export function init(container) {
   // series carries whatever the frames report; E_GOAL is a flat 0 line
   // unless a library goal target is active. Series colors come from the
   // active themeRamp (colors=null), keeping mono themes single-hue.
-  const WAVE_SERIES = ["E", "E_dem", "E_exch", "E_anis", "E_goal", "T"];
+  const WAVE_SERIES = ["E", "E_dem", "E_exch", "E_anis", "E_goal", "E_tile", "T"];
   const WAVE_DEFAULT_ON = new Set(["E", "T"]);
   const waveCanvas = el("canvas", { class: "chart", width: "520", height: "170" });
   waveChart = makeStripChart(waveCanvas, null);

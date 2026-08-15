@@ -221,6 +221,29 @@ def _e_goal(corr, n, lam_goal):
     return lam_goal * (n * n - corr) / 2.0
 
 
+def _e_tile(H, lam_tile: float) -> float:
+    """Flux-tessellation prior: lam_tile · (1 − h8_agree).
+
+    Zero when H is a perfect H₈ stamp (order 8) or when lam_tile = 0.
+    For n not divisible by 8 the H₄ catalog is used: extra unique 4×4
+    tiles beyond 4 are penalised (the ≡ 4 (mod 8) gap-order atom).
+    """
+    if lam_tile <= 0.0:
+        return 0.0
+    n = int(np.asarray(H).shape[0])
+    if n % 8 == 0:
+        t = flux_tiles(H, tile=8)
+        agree = t.get("h8_agree")
+        if agree is None:
+            return float(lam_tile)
+        return float(lam_tile) * (1.0 - float(agree))
+    if n % 4 == 0:
+        t = flux_tiles(H, tile=4)
+        extra = max(0, int(t["n_tiles"] or 0) - 4)
+        return float(lam_tile) * extra / max(int(t["n_blocks"] or 1), 1)
+    return float(lam_tile)
+
+
 def _swap_pair(H, rng):
     """Exchange a random +1 and a random -1 in the interior.
     Preserves total polarity count exactly (n(n+1)/2 positives)."""
@@ -239,7 +262,7 @@ def _swap_pair(H, rng):
 
 def micromag_sa(order, T_start=10.0, T_end=0.01, cooling=0.999, max_steps=50000,
                 lam_ex=0.0, lam_ani=0.0, n_swap=3, rng=None, start=None,
-                goal=None, lam_goal=0.5,
+                goal=None, lam_goal=0.5, lam_tile=0.0,
                 callback=None, stop_flag=None, live_params=None):
     """Simulated annealing micromag search with swap moves.
 
@@ -261,6 +284,14 @@ def micromag_sa(order, T_start=10.0, T_end=0.01, cooling=0.999, max_steps=50000,
     Keep lam_goal in a weak-coupling regime (≲ the demag scale): a large
     lam_goal collapses the search onto the target and stops exploration.
 
+    Flux-tile prior: when `lam_tile` > 0 an extra term
+
+        E_tile = lam_tile · (1 − h8_agree)
+
+    rewards the 4-tile H.8 (or 4-tile H.4 when 8 ∤ n) tessellation.
+    Default 0 — the landscape is unchanged.  Weak coupling only: a
+    large lam_tile freezes the Kronecker wallpaper and stops exploration.
+
     Optional streaming hooks (zero behavior change when omitted):
     - callback(dict): called every 500 steps with
       {"step", "T", "E", "best_E", "accepts", "H"} — H is the current
@@ -270,9 +301,9 @@ def micromag_sa(order, T_start=10.0, T_end=0.01, cooling=0.999, max_steps=50000,
     - stop_flag (threading.Event): checked every 500 steps; break early
       when set, returning the current best.
     - live_params (dict): mid-run retuning — every 500 steps the keys
-      "cooling" / "lam_ex" / "lam_ani" / "lam_goal" are read and applied
-      when present and not None (a WebSocket peer can mutate the dict
-      while SA runs).
+      "cooling" / "lam_ex" / "lam_ani" / "lam_goal" / "lam_tile" are
+      read and applied when present and not None (a WebSocket peer can
+      mutate the dict while SA runs).
     """
     rng = rng or np.random.default_rng()
     if start is None:
@@ -292,8 +323,9 @@ def micromag_sa(order, T_start=10.0, T_end=0.01, cooling=0.999, max_steps=50000,
     E_cur, _, _, _ = total_energy(H, lam_ex=lam_ex, lam_ani=lam_ani)
     corr_cur = int((H.astype(np.int64) * G.astype(np.int64)).sum()) \
         if G is not None else 0
+    tile_cur = _e_tile(H, lam_tile)
     best_H = H.copy(); best_E = E_cur
-    best_tot = E_cur + _e_goal(corr_cur, n, lam_goal)
+    best_tot = E_cur + _e_goal(corr_cur, n, lam_goal) + tile_cur
 
     T = T_start; steps = 0; accepts = 0; t0 = time.monotonic()
 
@@ -322,12 +354,15 @@ def micromag_sa(order, T_start=10.0, T_end=0.01, cooling=0.999, max_steps=50000,
             corr_new = int((H.astype(np.int64) * G.astype(np.int64)).sum())
             delta += _e_goal(corr_new, n, lam_goal) \
                    - _e_goal(corr_cur, n, lam_goal)
+        tile_new = _e_tile(H, lam_tile)
+        delta += tile_new - tile_cur
 
         if delta < 0 or rng.random() < math.exp(-delta / max(T, 1e-10)):
             E_cur = E_new; accepts += 1
+            tile_cur = tile_new
             if G is not None:
                 corr_cur = corr_new
-            tot = E_cur + _e_goal(corr_cur, n, lam_goal)
+            tot = E_cur + _e_goal(corr_cur, n, lam_goal) + tile_cur
             if tot < best_tot:
                 best_H = H.copy(); best_E = E_cur; best_tot = tot
         else:
@@ -356,14 +391,26 @@ def micromag_sa(order, T_start=10.0, T_end=0.01, cooling=0.999, max_steps=50000,
                         corr_best = int(
                             (best_H.astype(np.int64)
                              * G.astype(np.int64)).sum())
-                        best_tot = best_E + _e_goal(corr_best, n, lam_goal)
+                        best_tot = (best_E + _e_goal(corr_best, n, lam_goal)
+                                    + _e_tile(best_H, lam_tile))
+                lt = live_params.get("lam_tile")
+                if lt is not None:
+                    lam_tile = float(lt)
+                    tile_cur = _e_tile(H, lam_tile)
+                    eg = _e_goal(corr_cur, n, lam_goal) if G is not None else 0.0
+                    best_tot = best_E + eg + _e_tile(best_H, lam_tile)
             if callback is not None:
                 d = {"step": steps, "T": T, "E": E_cur,
                      "best_E": best_E, "accepts": accepts, "H": best_H,
                      "E_goal": _e_goal(corr_cur, n, lam_goal)
-                     if G is not None else 0.0}
+                     if G is not None else 0.0,
+                     "E_tile": tile_cur}
                 if G is not None:
                     d["goal_agree"] = (n * n + corr_cur) / (2.0 * n * n)
+                if lam_tile > 0.0:
+                    ft = flux_tiles(best_H)
+                    d["h8_agree"] = ft.get("h8_agree")
+                    d["n_tiles"] = ft.get("n_tiles")
                 callback(d)
             if stop_flag is not None and stop_flag.is_set():
                 break
@@ -375,6 +422,11 @@ def micromag_sa(order, T_start=10.0, T_end=0.01, cooling=0.999, max_steps=50000,
         corr_best = int((best_H.astype(np.int64) * G.astype(np.int64)).sum())
         info["E_goal"] = _e_goal(corr_best, n, lam_goal)
         info["goal_agree"] = (n * n + corr_best) / (2.0 * n * n)
+    if lam_tile > 0.0:
+        info["E_tile"] = _e_tile(best_H, lam_tile)
+        ft = flux_tiles(best_H)
+        info["h8_agree"] = ft.get("h8_agree")
+        info["n_tiles"] = ft.get("n_tiles")
     return best_H, info
 
 

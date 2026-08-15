@@ -1105,10 +1105,19 @@ def kicad_files(design_type: str, f_hz: float, **opts) -> dict:
             f"hoa64_filter_{design['kind']}_{_mhz(design['f_c'])}.kicad_mod",
             fp, design["f_c"], opts,
             title=f"hoa64 {design['kind']} { _mhz(design['f_c']) } MHz")
+    if design_type == "materials":
+        lay = opts.get("layout")
+        if not lay:
+            raise ValueError("materials design_type requires opts.layout")
+        name = opts.get("name") or f"hoa64_materials_{mhz}"
+        descr = opts.get("descr") or "hoa64 materials lab"
+        comment = opts.get("comment") or "flux-tile cloth/touch/meta"
+        fp = footprint_from_layout(lay, name, descr, comment)
+        return _with_board(f"{name}.kicad_mod", fp, f_hz, opts, title=name)
     raise ValueError(
         f"unknown design_type {design_type!r}; "
         "expected one of 'patch', 'meander_ifa', 'mifa', 'loop', 'lib', "
-        "'evolved', 'filter'")
+        "'evolved', 'filter', 'materials'")
 
 
 # --- self-check -----------------------------------------------------------------

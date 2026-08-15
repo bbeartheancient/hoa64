@@ -218,6 +218,7 @@ def _run_sim(job: Job):
             start=cur,
             goal=goal,
             lam_goal=float(p.get("lam_goal", 0.5)),
+            lam_tile=float(p.get("lam_tile", 0.0)),
             callback=cb,
             stop_flag=stop,
             live_params=live,
@@ -261,6 +262,7 @@ class SimReq(BaseModel):
     start: str = "random"
     goal_order: int | None = None
     lam_goal: float = 0.5
+    lam_tile: float = 0.0
 
 
 @router.post("/sim/micromag")
@@ -330,6 +332,7 @@ def sim_start(req: SimReq) -> dict:
         "field_every_steps": req.field_every_steps,
         "start": req.start,
         "lam_goal": req.lam_goal,
+        "lam_tile": req.lam_tile,
         "live": {},
     }
     if req.goal_order is not None:
