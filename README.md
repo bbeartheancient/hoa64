@@ -55,11 +55,11 @@ python3 -m hoa64.cli webapp
 | `hadamard_space.py` | ℍ³ transmute: row‑simplex PCA → Poincaré ball |
 | `em_physics.py` | Antenna physics core: lossy‑dielectric propagation, Friis, textbook antenna builders, Stokes polarization *(alpha)* |
 | `antenna_design.py` | Optimal‑construction recommender (band + site conditions) *(alpha)* |
-| `parts_db.py` | Curated off‑the‑shelf antenna parts DB + matcher *(alpha — DB needs expansion)* |
+| `parts_db.py` | Curated off‑the‑shelf antenna parts DB + matcher *(alpha — 57 catalog rows)* |
 | `fdtd.py` | 3‑D Yee FDTD Maxwell solver (air/water, polarization) *(alpha)* |
 | `antenna_evo.py` | Thin‑wire MoM evaluator + Hadamard‑seeded topology SA *(alpha)* |
 | `kicad_gen.py` | Procedural KiCad 7 footprints/boards for PCB antennas *(alpha)* |
-| `site_survey.py` | SRTM virtual site survey: terrain profiles, Fresnel/Deygout, link closure *(alpha)* |
+| `site_survey.py` | SRTM virtual site survey: tight DEM window, path profile, 4/3‑earth Fresnel/Deygout, radio horizon, Esri satellite mosaic *(alpha)* |
 | `noise_data.py` | NOISEX‑92 noise database access + log‑mel DSP *(alpha)* |
 | `dit_noise.py` | DiT‑backbone noise classifier (adaLN‑Zero, lazy torch) *(alpha)* |
 | `webapp/` | FastAPI + vanilla‑JS web GUI (see Webapp below) |
@@ -115,24 +115,33 @@ Tabs:
 - **Matrix Lab** — construct/verify matrices, pixel‑art preview, ℍ³
   transmute (row‑simplex PCA → Poincaré ball with geodesics)
 - **Search Studio** — launch max‑det/micromag/tile search jobs, live
-  progress over WebSocket, mid‑run retune, export to library
+  progress over WebSocket, mid‑run retune, export to library; one Run
+  panel (matrix + E/BEST/T waveforms, Micromag‑style series toggles)
 - **Micromag Sim** — annealing lab with live site‑energy/gradient/flux
   heatmaps, waveforms, and library‑goal evolution (E_goal/goal_agree)
 - **HOA Studio** — speaker‑array designer, scene encode/rotate/analyze
-- **Terrain** — Hadamard‑layered fBm heightfield with per‑octave mute/solo
+- **Terrain** — `[GENERATE]` / `[SURVEY]` sidebar switch.
+  GENERATE is the Hadamard‑layered fBm heightfield with per‑octave
+  mute/solo. SURVEY is the virtual site survey (moved here from
+  Antenna): SRTM Terrarium DEM in a tight path window, labeled TX/RX
+  elevation profile (ground / LOS / Fresnel 0.6 r₁ / blockage), and a
+  metric 3‑D link view (satellite‑textured mesh, masts at ground+h,
+  LOS chord, Fresnel rings). Blank or coincident RX probes eight
+  400 m bearings and keeps the clearest hop instead of inventing a
+  blocked due‑east path. Radio horizon and suggested mast heights
+  land in the link‑budget table.
 - **Orbitals** — hydrogenic |ψ|² point cloud (3D / XZ splat / both)
 - **Library** — construction‑DAG classification and achieved‑vs‑bound chart
 - **Antenna** *(ALPHA — needs extensive field testing)* — physics‑based
   antenna lab: DESIGN ranks optimal
   constructions by band + site conditions (exact antenna theory — dipole,
   patch, helix, yagi… with equation traces), PARTS matches a curated
-  off‑the‑shelf parts DB (everythingRF deep links), FIELDS runs a 3‑D
-  FDTD Maxwell solver (air/water/interface, live |E| heatmaps +
-  polarization), EVOLVE anneals Hadamard‑seeded wire topologies scored by
-  a real thin‑wire Method‑of‑Moments solver, SMITH sweeps Z_in(f) on an
-  interactive Γ‑plane chart, SURVEY runs a virtual site survey over open
-  SRTM terrain tiles (Fresnel clearance, Deygout diffraction, link
-  closure), and PCB types export procedural KiCad files
+  off‑the‑shelf parts DB (57 rows, everythingRF deep links), FIELDS runs a
+  3‑D FDTD Maxwell solver (air/water/interface, live |E| slice viewer +
+  E_RMS strip chart), EVOLVE anneals Hadamard‑seeded wire topologies
+  scored by a real thin‑wire Method‑of‑Moments solver, SMITH sweeps
+  Z_in(f) on an interactive Γ‑plane chart, and PCB types export
+  procedural KiCad files. Site survey lives on the Terrain tab.
 - **Noise** *(ALPHA — window‑level split over 15 long recordings; needs a
   larger database before real‑world generalization claims)* — DiT‑backbone
   noise classifier: train on the NOISEX‑92
@@ -140,9 +149,12 @@ Tabs:
   mic captures with a log‑mel spectrogram + class‑probability bars
 
 Seven retro‑monitor themes (MONO, P1, AMB, PLS, DMG, CGB, VGA — VGA with
-four subthemes), a settings panel with per‑display controls (brightness,
-contrast, saturation, bivert, DMG ghosting, CGB palette packs), and an
-original GLSL layer (CRT/DMG post passes, electric/quantum/flux shaders).
+four subthemes). `[SET]` opens a centered popup overlay (outside `#app`
+so display filters do not trap it) with per‑display controls
+(brightness, contrast, saturation, bivert, DMG ghosting, CGB palette
+packs). Original GLSL layer: CRT/DMG post passes, electric/quantum/flux
+shaders. HTML/JS/CSS are served `Cache-Control: no-cache` so a refresh
+picks up lab edits.
 
 **Security:** the server is unauthenticated and binds to localhost by
 default; several endpoints take filesystem paths.  Treat it as
