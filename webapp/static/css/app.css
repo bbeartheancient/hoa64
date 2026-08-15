@@ -355,11 +355,19 @@ table.positions input {
 }
 .src-row input { width: 64px; flex: none; }
 .src-row select { width: 72px; flex: none; }
-/* Bug 4: HOA Studio — sphere + scene panel side by side, both flexing */
-.hoa-row { align-items: flex-start; }
-.hoa-row .three-wrap { flex: 1 1 480px; min-width: 320px; }
-.hoa-row .scene-panel { flex: 1 1 380px; min-width: 300px; }
-.hoa-row .scene-panel .row { flex-wrap: wrap; }
+/* Scene was in the 340px sidebar — source rows and yaw/pitch/roll
+   sliders need the full lab width. */
+.lab.hoa-lab .hoa-scene {
+  grid-column: 1 / -1;
+}
+.hoa-scene .src-row {
+  flex-wrap: wrap;
+}
+.hoa-scene .src-row input {
+  width: 88px;
+  flex: 1;
+  min-width: 72px;
+}
 .heat-canvas { margin-top: 8px; }
 .three-wrap { text-align: center; }
 .three-wrap canvas { border: 1px solid var(--panel-line); max-width: 100%; height: auto; }

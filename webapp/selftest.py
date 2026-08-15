@@ -1206,8 +1206,12 @@ def selftest() -> int:
     r = client.get("/js/tabs/hoa_studio.js")
     expect("hoa-viz" in r.text and "hoa-viz-cell" in r.text,
            "hoa_studio.js sphere missing half-size class")
+    expect("hoa-scene" in r.text and "hoa-lab" in r.text,
+           "hoa_studio.js Scene panel not full-width")
     r = client.get("/css/app.css")
     expect(".hoa-viz" in r.text, "app.css missing HOA half-size rule")
+    expect(".hoa-scene" in r.text and "grid-column" in r.text,
+           "app.css missing HOA Scene full-width rule")
     print("PASS UI overhaul markers")
 
     # ---------------- static integrity (module-graph regression guard) -----

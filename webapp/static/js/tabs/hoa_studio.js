@@ -430,7 +430,7 @@ export function init(container) {
 
   const scenePanel = el(
     "div",
-    { class: "panel" },
+    { class: "panel hoa-scene" },
     el("h2", {}, "Scene"),
     ...[0, 1, 2, 3].map(sourceRow),
     rotSlider("rot-yaw", "yaw"),
@@ -479,9 +479,10 @@ export function init(container) {
   container.replaceChildren(
     el(
       "div",
-      { class: "lab" },
-      el("div", {}, designer, scenePanel),
-      el("div", {}, viewsPanel, analysisPanel)
+      { class: "lab hoa-lab" },
+      el("div", {}, designer),
+      el("div", {}, viewsPanel, analysisPanel),
+      scenePanel
     )
   );
 
