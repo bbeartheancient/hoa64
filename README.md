@@ -7,9 +7,9 @@ Goethals‑Seidel, Kronecker products), heuristic search engines (micromagnetic
 descent, FFT‑based PSD minimization, signature‑guided RNN search), and
 direct integration with SageMath for orders above 2000.
 
-**807 orders verified up to order 3984.  All known Hadamard matrices below
-2000 are constructible except 3 (1212, 1852, 1940) which have been proven
-to exist but have inaccessible construction data.**
+**810 orders verified up to order 7408.  Gaps below 2000 are 1212 and 1940
+(existence proven, construction data still inaccessible).  Order 1852
+ships as a Djoković 1992 solution (`matrices/hadamard_1852.csv.gz`).**
 
 Hadamard Matrix Library/Solver
 
@@ -90,18 +90,19 @@ python3 -m hoa64.cli webapp
 | `terrain.py` | Hadamard‑layered Perlin fBm terrain generator |
 | `orbitals.py` | Hydrogenic real‑orbital \|ψ\|² sampler (SN3D convention) |
 | `hadamard_space.py` | ℍ³ transmute: row‑simplex PCA → Poincaré ball |
-| `em_physics.py` | Antenna physics core: lossy‑dielectric propagation, Friis, textbook antenna builders, Stokes polarization *(alpha)* |
+| `em_physics.py` | Antenna physics core: lossy‑dielectric propagation, Friis, textbook builders, Stokes polarization, phased‑array factor/tapers *(alpha)* |
 | `antenna_design.py` | Optimal‑construction recommender (band + site conditions) *(alpha)* |
-| `parts_db.py` | Curated off‑the‑shelf antenna parts DB + matcher *(alpha — 57 catalog rows)* |
+| `parts_db.py` | Curated off‑the‑shelf antenna parts DB + matcher *(alpha — 103 catalog rows)* |
 | `fdtd.py` | 3‑D Yee FDTD Maxwell solver (air/water, polarization) *(alpha)* |
 | `antenna_evo.py` | Thin‑wire MoM evaluator + Hadamard‑seeded topology SA *(alpha)* |
 | `kicad_gen.py` | Procedural KiCad 7 footprints/boards for PCB antennas, RF filters, and 2-layer materials *(alpha)* |
-| `rf_filter.py` | PCB RF-filter synthesis (Butterworth/Chebyshev LPF/HPF/hairpin/stub) + ABCD S-params + Hadamard SA; lumped LC/RC/CRC export planned *(alpha)* |
+| `rf_filter.py` | PCB RF-filter synthesis (Butterworth/Chebyshev LPF/HPF/BPF/BSF) — distributed stepped/stub/hairpin plus lumped `lc`/`dc_lc`/`c_shunt`/`qw_tl`/`rc`/`crc`/`rl` + ABCD S-params + Hadamard SA *(alpha)* |
 | `materials.py` | H.8 flux-tile homes: conductive cloth, mutual-cap touchpad, spin-ice/metamaterial cell *(alpha)* |
+| `mcu.py` | Microcontroller lab: WS2812 firmware, ESP-NOW mesh, edge-engine export (CircuitPython / Rust `no_std` / bare-metal C) *(alpha)* |
 | `site_survey.py` | SRTM virtual site survey: tight DEM window, path profile, 4/3‑earth Fresnel/Deygout, radio horizon, Esri satellite mosaic *(alpha)* |
 | `noise_data.py` | NOISEX‑92 access + 4 synthesized RF baseband classes (BLE/WiFi/Zigbee/LoRa) + log‑mel DSP *(alpha)* |
 | `dit_noise.py` | DiT‑backbone noise classifier (adaLN‑Zero, Muon/AdamW, lazy torch) *(alpha)* |
-| `muon.py` | Muon/Dion3 optimizer: Newton–Schulz polar factor of momentum *(alpha)* |
+| `muon.py` | Muon/Dion3 optimizer: cursed-quintic Newton–Schulz orthogonalization of momentum (Gram-NS + row subsample) *(alpha)* |
 | `darpa_challenges.py` | DARPA's 23 mathematical challenges + honest tooling alignment |
 | `webapp/` | FastAPI + vanilla‑JS web GUI (see Webapp below) |
 | `rh.py` | RH |Δₙ| bound checker |
@@ -118,7 +119,7 @@ python3 -m hoa64.cli webapp
 - **Propus** — Balonin‑Djoković symmetric array
 - **Cooper‑Wallis** — Turyn→T‑sequence→CW (16 orders)
 - **Goethals‑Seidel** — SDS difference families (via SageCell/SageMath)
-- **CSV import** — 12 Alpoge matrices (668‑1964, formerly open)
+- **CSV import** — 12 Alpoge matrices (668‑1964, formerly open) plus Djoković H.1852
 
 ## Search Engines
 
@@ -126,6 +127,7 @@ python3 -m hoa64.cli webapp
 - **Williamson FFT** — PSD minimization over 4 circulant sequences
 - **General‑circulant GS** — 4 sequences, no symmetry constraint
 - **Micromagnetic** — exchange + demagnetization + anisotropy energy
+- **Tile SA** — 2×2 H₂-cell simulated annealing
 - **RNN‑guided** — LSTM scores candidate seeds before micromag descent
 - **Signature‑guided** — predicted block signature seeds from trained model
 
@@ -196,29 +198,31 @@ Tabs:
   antenna lab: DESIGN ranks optimal
   constructions by band + site conditions (exact antenna theory — dipole,
   patch, helix, yagi… with equation traces), PARTS matches a curated
-  off‑the‑shelf parts DB (57 rows, everythingRF deep links; a wide query
+  off‑the‑shelf parts DB (103 rows, everythingRF deep links; a wide query
   such as 2400–5800 lists every overlapping row when no part covers the
   full span — dual‑band SKUs are one row per lobe), FIELDS runs a
   3‑D FDTD Maxwell solver (air/water/interface, live |E| slice viewer +
   E_RMS strip chart), EVOLVE anneals Hadamard‑seeded wire topologies
   scored by a real thin‑wire Method‑of‑Moments solver, SMITH sweeps
-  Z_in(f) on an interactive Γ‑plane chart, and PCB types export
+  Z_in(f) on an interactive Γ‑plane chart, ARRAY is the phased‑array
+  designer (tapers, steering, grating‑lobe metrics, polar plot of
+  total_db over the array factor), and PCB types export
   procedural KiCad files (MIFA / scaled `RF_Antenna.pretty` library /
   evolved walk, with a FOOTPRINT/BOARD canvas preview in fixed KiCad
   layer colours — red F.Cu, blue B.Cu; silk/edge/keepout are outlines
   only so they do not wash out the copper — and the JLCPCB
   λ/4·50 Ω·RL≥10 dB checklist). Site survey lives on the Terrain tab.
 - **Filter** *(ALPHA)* — PCB RF filters from the everythingRF Filter
-  Digest. Same Butterworth/Chebyshev *g*-values drive every kind:
-  stepped‑Z LPF, gap+stub HPF, hairpin BPF, open‑stub BSF. DESIGN
-  synthesises geometry and plots S21/S11 from a lossy microstrip ABCD
+  Digest. Same Butterworth/Chebyshev *g*-values drive every kind.
+  Distributed topos: stepped‑Z LPF, gap+stub HPF, hairpin BPF,
+  open‑stub BSF. Lumped topos from the same prototype: `lc` ladders,
+  `dc_lc` / `c_shunt` coupled-resonator BPF, `qw_tl` Richards/Kuroda
+  lines, and passive `rc`/`crc`/`rl` (approximate in 50 Ω). DESIGN
+  synthesises geometry or a BOM and plots S21/S11 from a lossy ABCD
   cascade (RL ≥ 10 dB, 40 dBc @ 10 % from the edge). EVOLVE
-  Hadamard‑perturbs section lengths/widths. KICAD exports
-  `.kicad_mod` / `.kicad_pcb` with the same unthemed red/blue
-  footprint preview as Antenna.
-  **Now:** distributed microstrip copper. **Next:** lumped output
-  forms from the same prototype (LC ladder, RC, CRC/π, and similar
-  discrete networks) — not implemented yet.
+  Hadamard‑perturbs distributed section lengths/widths. KICAD exports
+  `.kicad_mod` / `.kicad_pcb`, plus a KiCad ≥8 `.kicad_block` zip
+  (schematic + board) for lumped topos.
 - **Noise** *(ALPHA — window‑level split over 15 long recordings + 4
   synthesized RF envelopes; needs a larger database before real‑world
   generalization claims)* — DiT‑backbone noise classifier: train on
@@ -227,6 +231,14 @@ Tabs:
   a Muon (Dion3) or AdamW optimizer and a live loss/accuracy chart,
   then classify WAV files or live mic captures with a log‑mel
   spectrogram + class‑probability bars
+- **Microcontroller** *(ALPHA — firmware is template-generated; hardware
+  testing is on the user)* — `[LED]` paints WS2812 frames (serpentine
+  GRB) and downloads ESP32 / Teensy / CircuitPython sketches, or
+  pushes a frame to a device IP. `[MESH]` (RSSI tomography, no CSI)
+  downloads ESP-NOW node sketches, collects the gateway RSSI matrix,
+  and exports `mesh_field.json`. `[EDGE]` downloads
+  `hadamard_core` / `flux_map` / `terrain_fbm` kernels as CircuitPython,
+  Rust `#![no_std]`, or bare-metal C.
 
 Seven retro‑monitor themes (MONO, P1, AMB, PLS, DMG, CGB, VGA — VGA with
 four subthemes). `[SET]` opens a centered popup overlay (outside `#app`
@@ -248,12 +260,14 @@ adding auth.
 
 ## Data
 
-The `matrices/` directory contains 12 gzipped Alpoge Hadamard matrices
-(the formerly‑open orders 668‑1964, discovered Aug 12 2026).
-Run `rebuild.py` to decompress them and regenerate all constructible orders.
+The `matrices/` directory contains 13 gzipped Hadamard matrices: 12 Alpoge
+orders (668‑1964, formerly open, ingested Aug 12 2026) plus Djoković's
+H.1852. Run `rebuild.py` to decompress them and regenerate all
+constructible orders.
 
-The `open_hadamard/` directory (not in repo) stores the full 807‑matrix
-CSV library built by `evolve.py`.  Each file is comma‑separated ±1 values.
+The `open_hadamard/` directory (not in repo) stores the full 810‑matrix
+CSV library built by `evolve.py` (no hard order ceiling).  Each file is
+comma‑separated ±1 values.
 
 ## Requirements
 
@@ -265,8 +279,8 @@ CSV library built by `evolve.py`.  Each file is comma‑separated ±1 values.
 
 ## Key Results
 
-- 807 Hadamard matrices built & verified
-- 3 gaps below 2000: 1212, 1852, 1940 (known existence, inaccessible data)
-- 195 gaps above 2000 (constructible via SageMath)
+- 810 Hadamard matrices built & verified (highest 7408)
+- 2 gaps below 2000: 1212, 1940 (known existence, inaccessible data)
+- H.1852 verified (Djoković 1992; ships in `matrices/`)
 - H.668 verified as genuine Hadamard (Aug 12 2026)
-- 12 formerly‑open orders (668‑1964) ingested as gzipped CSVs
+- 12 formerly‑open Alpoge orders (668‑1964) ingested as gzipped CSVs
