@@ -274,10 +274,12 @@ def gerzon_ils(order, T_start=20.0, cooling=0.9995, sa_steps=15000,
     best_f = None
     it = 0
     t0 = time.monotonic()
-    while it < restarts:
+    while True:
         if stop_flag is not None and stop_flag.is_set():
             break
         if time_budget and time.monotonic() - t0 > time_budget:
+            break
+        if time_budget is None and it >= restarts:
             break
         H, _st = gerzon_sa(
             order, T_start=T_start, cooling=cooling, max_steps=sa_steps,

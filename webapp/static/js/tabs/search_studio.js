@@ -137,11 +137,13 @@ async function finishRun() {
       exportBtn.style.display = "";
       exportBtn.disabled = false;
     } else {
-      msg(
-        `no Hadamard found (best_f=${r.best_f ?? "?"}${r.info ? `, best_E=${r.info.best_E}` : ""})`,
-        "error"
+      const best = r.best_f ?? r.best_E ?? r.info?.best_E ?? "?";
+      msg(`budget done — no Hadamard yet (best ${best})`, "");
+      statsEl.replaceChildren(
+        statRow("ok", false),
+        statRow("best", best),
+        statRow("engine", r.engine || (d.params || {}).engine || "—")
       );
-      statsEl.replaceChildren(statRow("ok", false, "bad"), statRow("best_f", r.best_f ?? "?"));
     }
   } catch (e) {
     msg(`result fetch failed: ${e.message}`, "error");

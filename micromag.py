@@ -447,10 +447,12 @@ def micromag_ils_robust(order, T_start=20.0, n_flip=3, sa_steps=20000,
     it = 0
     t0 = time.monotonic()
 
-    while it < restarts:
+    while True:
         if stop_flag is not None and stop_flag.is_set():
             break
         if time_budget and time.monotonic() - t0 > time_budget:
+            break
+        if time_budget is None and it >= restarts:
             break
         H, st = micromag_sa(order, T_start=T_start, n_swap=n_flip,
                             max_steps=sa_steps, rng=rng,

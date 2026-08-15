@@ -83,7 +83,7 @@ def _sa_reporter(job: Job, order: int):
     """
     engine = job.params["engine"]
     t0 = time.monotonic()
-    last_preview = [0.0]
+    last_preview = [t0 - PREVIEW_EVERY]  # first H paints immediately
 
     def cb(stats: dict) -> None:
         stats = dict(stats)
@@ -117,18 +117,52 @@ def _register(name: str):
     return deco
 
 
+def _reheat_sa(job: Job, order: int, rng, run_sa):
+    """Cool → perturb → reheat until the job budget/cancel fires.
+
+    One SA cool-down on a modest order finishes in well under a second, so
+    Search Studio used to return "no Hadamard" before the matrix preview
+    ever painted.  Same reheat chain as the micromag sim lab.
+    """
+    from ..hadamard import perturb
+
+    stop = _BudgetStop(job)
+    cb = _sa_reporter(job, order)
+    cur = None
+    best_H, best_info, best_E = None, None, float("inf")
+    while not stop.is_set():
+        H, info = run_sa(start=cur, callback=cb, stop_flag=stop, rng=rng)
+        E = info.get("best_E")
+        if E is None:
+            E = info.get("f", float("inf"))
+        if H is not None and E < best_E:
+            best_H, best_E, best_info = H, E, info
+        if info.get("hadamard") or (isinstance(E, (int, float)) and E < 1e-9):
+            break
+        if stop.is_set() or best_H is None:
+            break
+        cur = perturb(best_H, rng, frac=0.05)
+    return best_H, {**(best_info or {}), "best_E": best_E}
+
+
 @_register("maxdet")
 def _run_maxdet(job: Job):
     from .. import hadamard as hd
 
     p = job.params
+    rng = np.random.default_rng(p.get("seed"))
+    # Search Studio is a *search* — do not start from a library/construction
+    # matrix or order 64 (Sylvester) finishes in one local-search pass.
+    # warm_start is for the selftest / CLI-style "known seed first" path.
+    seeds = None if p.get("warm_start") else [hd.random_seed(p["order"], rng)]
     H, st = hd.ils_search(
         p["order"],
+        seeds=seeds,
         time_budget=p["budget_s"],
         seed_int=p.get("seed"),
         print_progress=False,
-        iter_callback=lambda s: report(job, engine="maxdet", **s),
-        stop_flag=job.cancel,
+        iter_callback=_sa_reporter(job, p["order"]),
+        stop_flag=_BudgetStop(job),
     )
     if H is None:  # cancelled before the first iteration
         return None, {"best_f": None}
@@ -145,18 +179,21 @@ def _run_micromag(job: Job):
     rng = np.random.default_rng(p.get("seed"))
     stop = _BudgetStop(job)
     if p.get("mode") == "sa":
-        H, info = micromag.micromag_sa(
-            order,
-            T_start=p.get("T_start", 10.0),
-            cooling=p.get("cooling", 0.999),
-            lam_ex=p.get("lam_ex", 0.0),
-            lam_ani=p.get("lam_ani", 0.0),
-            max_steps=int(p.get("max_steps", 10**9)),
-            callback=_sa_reporter(job, order),
-            stop_flag=stop,
-            live_params=live,
-            rng=rng,
-        )
+        def _once(*, start, callback, stop_flag, rng):
+            return micromag.micromag_sa(
+                order,
+                T_start=p.get("T_start", 10.0),
+                cooling=p.get("cooling", 0.999),
+                lam_ex=p.get("lam_ex", 0.0),
+                lam_ani=p.get("lam_ani", 0.0),
+                max_steps=int(p.get("max_steps", 10**9)),
+                callback=callback,
+                stop_flag=stop_flag,
+                live_params=live,
+                rng=rng,
+                start=start,
+            )
+        H, info = _reheat_sa(job, order, rng, _once)
         return H, {"best_E": info.get("best_E"), "info": info}
     H, best_f, ok = micromag.micromag_ils_robust(
         order, time_budget=p["budget_s"], stop_flag=stop, rng=rng,
@@ -174,15 +211,18 @@ def _run_tile(job: Job):
     rng = np.random.default_rng(p.get("seed"))
     stop = _BudgetStop(job)
     if p.get("mode") == "sa":
-        H, info = tile_search.tile_sa_swap(
-            order,
-            T_start=p.get("T_start", 20.0),
-            cooling=p.get("cooling", 0.9995),
-            max_steps=int(p.get("max_steps", 10**9)),
-            callback=_sa_reporter(job, order),
-            stop_flag=stop,
-            rng=rng,
-        )
+        def _once(*, start, callback, stop_flag, rng):
+            return tile_search.tile_sa_swap(
+                order,
+                T_start=p.get("T_start", 20.0),
+                cooling=p.get("cooling", 0.9995),
+                max_steps=int(p.get("max_steps", 10**9)),
+                callback=callback,
+                stop_flag=stop_flag,
+                rng=rng,
+                start=start,
+            )
+        H, info = _reheat_sa(job, order, rng, _once)
         return H, {"best_E": info.get("best_E"), "info": info}
     H, best_f, ok = tile_search.tile_ils(
         order, time_budget=p["budget_s"], stop_flag=stop, rng=rng,
@@ -201,16 +241,19 @@ def _run_gerzon(job: Job):
     stop = _BudgetStop(job)
     lam_z = float(p.get("lam_z", 1.0))
     if p.get("mode") == "sa":
-        H, info = gerzon.gerzon_sa(
-            order,
-            T_start=p.get("T_start", 20.0),
-            cooling=p.get("cooling", 0.9995),
-            max_steps=int(p.get("max_steps", 10**9)),
-            lam_z=lam_z,
-            callback=_sa_reporter(job, order),
-            stop_flag=stop,
-            rng=rng,
-        )
+        def _once(*, start, callback, stop_flag, rng):
+            return gerzon.gerzon_sa(
+                order,
+                T_start=p.get("T_start", 20.0),
+                cooling=p.get("cooling", 0.9995),
+                max_steps=int(p.get("max_steps", 10**9)),
+                lam_z=lam_z,
+                callback=callback,
+                stop_flag=stop_flag,
+                rng=rng,
+                start=start,
+            )
+        H, info = _reheat_sa(job, order, rng, _once)
         return H, {"best_E": info.get("best_E"), "info": info}
     H, best_f, ok = gerzon.gerzon_ils(
         order, time_budget=p["budget_s"], lam_z=lam_z,
@@ -291,9 +334,13 @@ def _package_result(job: Job, H, info: dict, label: str) -> dict:
         job.matrix = H  # kept off the JSON result; /export re-reads it
         n = int(H.shape[0])
         from ..micromag import flux_tiles
-        from ..gerzon import analyze as gerzon_analyze
-        gz = gerzon_analyze(H)
-        gz.pop("Z_wall", None)  # keep the JSON light; maps stay on the engine
+        gz = None
+        try:
+            from ..gerzon import analyze as gerzon_analyze
+            gz = gerzon_analyze(H)
+            gz.pop("Z_wall", None)
+        except Exception:
+            gz = None
         return {
             "ok": True,
             "order": n,

@@ -44,7 +44,8 @@ def _swap_random(H, rng):
 
 
 def tile_sa_swap(order, T_start=20.0, T_end=0.01, cooling=0.9995,
-                 max_steps=20000, rng=None, callback=None, stop_flag=None):
+                 max_steps=20000, rng=None, callback=None, stop_flag=None,
+                 start=None):
     """Tile‑based SA using swap moves (preserves polarity count).
 
     Each proposal: pick two random interior tiles, flip both simultaneously.
@@ -56,9 +57,13 @@ def tile_sa_swap(order, T_start=20.0, T_end=0.01, cooling=0.9995,
       best ±1 matrix (for live previews; never serialized).
     - stop_flag (threading.Event): checked every 500 steps; break early
       when set, returning the current best.
+    - start: optional ±1 warm start (else ``random_seed``).
     """
     rng = rng or np.random.default_rng()
-    H = random_seed(order, rng).astype(np.int8)
+    if start is not None:
+        H = np.array(start, dtype=np.int8, copy=True)
+    else:
+        H = random_seed(order, rng).astype(np.int8)
     n = H.shape[0]
     E_cur = total_energy_fast(H)
     best_H = H.copy(); best_E = E_cur
@@ -113,9 +118,10 @@ def tile_ils(order, T_start=20.0, cooling=0.9995, sa_steps=15000,
     """
     rng = rng or np.random.default_rng()
     best_H = None; best_f = None; it = 0; t0 = time.monotonic()
-    while it < restarts:
+    while True:
         if stop_flag is not None and stop_flag.is_set(): break
         if time_budget and time.monotonic() - t0 > time_budget: break
+        if time_budget is None and it >= restarts: break
         H, st = tile_sa_swap(order, T_start=T_start, cooling=cooling,
                         max_steps=sa_steps, rng=rng,
                         callback=progress_callback, stop_flag=stop_flag)

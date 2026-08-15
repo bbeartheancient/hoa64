@@ -471,7 +471,9 @@ def local_search(
         flips += 1
         if flips % report_every == 0:
             if callback:
-                callback(make_stats(Hm))
+                st = make_stats(Hm)
+                st["H"] = Hm
+                callback(st)
             if stop_flag is not None and stop_flag.is_set():
                 break
     st = make_stats(Hm)
@@ -523,10 +525,12 @@ def ils_search(
     bestf = None
     it = 0
     t0 = time.monotonic()
-    while it < outer_iters:
+    while True:
         if stop_flag is not None and stop_flag.is_set():
             break
         if time_budget is not None and time.monotonic() - t0 > time_budget:
+            break
+        if time_budget is None and it >= outer_iters:
             break
         if best is not None and it > 0:
             H0 = perturb(best, rng, frac)
@@ -567,6 +571,7 @@ def ils_search(
                     "best_f": bestf,
                     "det_log10": det_log10(best),
                     "is_hadamard": bool(bestf == 0),
+                    "H": best,
                 }
             )
         it += 1

@@ -87,7 +87,10 @@ def selftest() -> int:
             time.sleep(0.2)
         raise AssertionError(f"job {job_id} did not reach terminal state in {timeout}s")
 
-    r = client.post("/api/search", json={"engine": "maxdet", "order": 8, "budget_s": 2})
+    r = client.post("/api/search", json={
+        "engine": "maxdet", "order": 8, "budget_s": 2,
+        "params": {"warm_start": True},
+    })
     expect(r.status_code == 200 and "job_id" in r.json(), "POST /api/search maxdet")
     d = wait_terminal(r.json()["job_id"], 15.0)
     expect(d["status"] == "done", f"maxdet job status {d['status']}")
