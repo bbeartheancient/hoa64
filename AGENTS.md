@@ -102,7 +102,10 @@ channel count, and FOA is a normalized H4.
   (pinned three.js 0.170.0 + OrbitControls, import map in index.html),
   `static/js/kicad_layers.js` (fixed copper palette for all KiCad
   previews — red F.Cu, blue B.Cu, green In1.Cu, orange In2.Cu;
-  theme LUT is bypassed; W=½ edges unfilled),
+  theme LUT is bypassed; W=½ edges unfilled; paint order is B.Cu →
+  inners → F.Cu → silk/edge/keepout; silk courtyards, Edge.Cuts, and
+  keepout zones are stroked only — filling them painted a gray/yellow
+  wash over the Antenna copper; B.Cu GND pours fill blue),
   `static/css/themes.css` + `static/js/theme.js` (Phase 4.5/6/7: seven
   runtime retro-monitor themes — mono/P1/AMB/PLS/DMG/CGB/VGA —
   `data-theme` + localStorage, `recolorCanvas` LUT for server PNGs (theme
@@ -190,7 +193,8 @@ channel count, and FOA is a normalized H4.
   passed to `el()` — that threw and painted an empty table) and shows
   overlap % when `/parts` falls back from full-cover, KICAD is a
   standalone export form (PATCH/MEANDER IFA/MIFA/LOOP/LIBRARY/LAST
-  EVOLVED) with a FOOTPRINT/BOARD canvas preview, JLCPCB design_params
+  EVOLVED) with a FOOTPRINT/BOARD canvas preview (red F.Cu on blue
+  B.Cu via `drawKicadPrims`, not the theme LUT), JLCPCB design_params
   table, and per-file download links — LIBRARY scales
   `RF_Antenna.pretty`, EVOLVE has WIRE/PCB topology plus Export KiCad,
   SMITH renders the MoM Z_in sweep on an interactive Γ plane with hover
@@ -279,7 +283,8 @@ channel count, and FOA is a normalized H4.
   (procedural KiCad 7 `.kicad_mod`/`.kicad_pcb` for
   patch/meander-IFA/MIFA/loop plus scaled `RF_Antenna.pretty` library
   bases and evolved walks; JLCPCB design_params + s-expr preview
-  prims; Wheeler/Hammerstad 50 Ω feedline, 6h ground, keep-out under
+  prims (`layer` prefers a real *.Cu token; `fill` is captured so
+  silk/Edge.Cuts stay `none`); Wheeler/Hammerstad 50 Ω feedline, 6h ground, keep-out under
   the radiator; also `footprint_filter` / `design_type="filter"` for
   stepped/hairpin/stub RF filters from `rf_filter.layout_mm`; S-expr
   parser validity gate + `kicad-cli pcb upgrade` check when available),

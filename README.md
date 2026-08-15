@@ -157,7 +157,9 @@ Tabs:
   scored by a real thin‑wire Method‑of‑Moments solver, SMITH sweeps
   Z_in(f) on an interactive Γ‑plane chart, and PCB types export
   procedural KiCad files (MIFA / scaled `RF_Antenna.pretty` library /
-  evolved walk, with a FOOTPRINT/BOARD canvas preview and the JLCPCB
+  evolved walk, with a FOOTPRINT/BOARD canvas preview in fixed KiCad
+  layer colours — red F.Cu, blue B.Cu; silk/edge/keepout are outlines
+  only so they do not wash out the copper — and the JLCPCB
   λ/4·50 Ω·RL≥10 dB checklist). Site survey lives on the Terrain tab.
 - **Filter** *(ALPHA)* — PCB RF filters from the everythingRF Filter
   Digest. Same Butterworth/Chebyshev *g*-values drive every kind:
@@ -165,7 +167,8 @@ Tabs:
   synthesises geometry and plots S21/S11 from a lossy microstrip ABCD
   cascade (RL ≥ 10 dB, 40 dBc @ 10 % from the edge). EVOLVE
   Hadamard‑perturbs section lengths/widths. KICAD exports
-  `.kicad_mod` / `.kicad_pcb` with a footprint preview.
+  `.kicad_mod` / `.kicad_pcb` with the same unthemed red/blue
+  footprint preview as Antenna.
   **Now:** distributed microstrip copper. **Next:** lumped output
   forms from the same prototype (LC ladder, RC, CRC/π, and similar
   discrete networks) — not implemented yet.

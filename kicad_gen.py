@@ -667,12 +667,24 @@ def preview_from_sexpr(tree: list) -> dict:
     prims: list[dict] = []
 
     def layer_of(node) -> str:
+        found: list[str] = []
         for ch in node:
-            if isinstance(ch, list) and ch and ch[0] == "layer" and len(ch) > 1:
+            if isinstance(ch, list) and ch and ch[0] in ("layer", "layers"):
+                for tok in ch[1:]:
+                    found.append(str(tok).strip('"'))
+        for L in found:
+            if L in ("F.Cu", "B.Cu") or (".Cu" in L and "In" in L):
+                return L
+        for L in found:
+            if ".Cu" in L:
+                return L
+        return found[0] if found else "F.Cu"
+
+    def fill_of(node) -> str:
+        for ch in node:
+            if isinstance(ch, list) and ch and ch[0] == "fill" and len(ch) > 1:
                 return str(ch[1]).strip('"')
-            if isinstance(ch, list) and ch and ch[0] == "layers" and len(ch) > 1:
-                return str(ch[1]).strip('"')
-        return "F.Cu"
+        return ""
 
     def walk(node):
         if not isinstance(node, list) or not node:
@@ -703,7 +715,8 @@ def preview_from_sexpr(tree: list) -> dict:
                         if isinstance(xy, list) and xy[0] == "xy":
                             pts.append((_tok_num(xy[1]), _tok_num(xy[2])))
             if pts:
-                prims.append({"kind": "poly", "pts": pts, "layer": layer_of(node)})
+                prims.append({"kind": "poly", "pts": pts,
+                              "layer": layer_of(node), "fill": fill_of(node)})
         elif head in ("fp_rect", "gr_rect"):
             s = e = None
             for ch in node:
@@ -713,7 +726,7 @@ def preview_from_sexpr(tree: list) -> dict:
                     e = (_tok_num(ch[1]), _tok_num(ch[2]))
             if s and e:
                 prims.append({"kind": "rect", "a": s, "b": e,
-                              "layer": layer_of(node)})
+                              "layer": layer_of(node), "fill": fill_of(node)})
         elif head in ("fp_circle", "gr_circle"):
             c = rxy = None
             w = 0.15
@@ -1201,6 +1214,12 @@ if __name__ == "__main__":
     assert "(pad \"SH1\"" in fmifa and "(keepout" in fmifa
     prev = preview_from_text(fmifa)
     assert prev["prims"] and prev["bbox"]["xmax"] > prev["bbox"]["xmin"]
+    silk = [p for p in prev["prims"] if "Silk" in p.get("layer", "")]
+    assert silk and all(p.get("fill") == "none" for p in silk), silk
+    bprev = preview_from_text(board_from_footprint(fmifa, F0))
+    assert any(p["kind"] == "zone" and p["layer"] == "B.Cu" for p in bprev["prims"])
+    assert any(p["kind"] == "rect" and p.get("fill") == "none"
+               and "Edge" in p.get("layer", "") for p in bprev["prims"])
     print(f"PASS  MIFA + design_params: RL≥{dp['return_loss_target_db']:.0f} dB, "
           f"20 mil trace, {len(prev['prims'])} preview prims")
 

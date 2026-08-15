@@ -247,6 +247,8 @@ def selftest() -> int:
     r = client.get("/js/kicad_layers.js")
     expect(r.status_code == 200 and "#e31c23" in r.text and "In2.Cu" in r.text,
            "kicad_layers.js palette")
+    expect("shouldFill" in r.text and "paintRank" in r.text,
+           "kicad_layers.js missing overlay paint order")
     for tab in ("antenna.js", "filter.js", "materials.js"):
         src = client.get(f"/js/tabs/{tab}").text
         expect("kicad_layers.js" in src, f"{tab} missing kicad_layers import")
