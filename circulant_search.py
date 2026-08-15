@@ -85,9 +85,10 @@ def search_ils(n, inner_flips=20000, outer_iters=30, time_budget=None,
     rng = rng or np.random.default_rng()
     m = int(math.isqrt(n)); n_plus = (n + m) // 2
     best_a = None; best_f = None; it = 0; t0 = time.monotonic()
-    while it < outer_iters:
+    while True:
         if stop_flag is not None and stop_flag.is_set(): break
         if time_budget and time.monotonic() - t0 > time_budget: break
+        if not time_budget and it >= outer_iters: break
         if best_a is not None and it > 0:
             a = np.round(best_a).astype(np.float64)
             kp = max(1, int(frac * n))

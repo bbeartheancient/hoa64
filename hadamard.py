@@ -569,17 +569,18 @@ def ils_search(
                     "iter": it,
                     "f": st["f"],
                     "best_f": bestf,
-                    "det_log10": det_log10(best),
+                    "det_log10": det_log10(best) if best.shape[0] <= 500 else None,
                     "is_hadamard": bool(bestf == 0),
                     "H": best,
                 }
             )
         it += 1
     bestst = make_stats(best)
+    n = int(best.shape[0])
     bestst.update(
         iters=it,
         elapsed_s=time.monotonic() - t0,
-        det_log10=det_log10(best),
+        det_log10=det_log10(best) if n <= 500 else None,
         is_hadamard=verify(best),
     )
     return best, bestst

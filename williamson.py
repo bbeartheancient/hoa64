@@ -171,10 +171,12 @@ def williamson_ils(k, inner_flips=20000, outer_iters=20, time_budget=None,
     best_f = None
     it = 0
     t0 = time.monotonic()
-    while it < outer_iters:
+    while True:
         if stop_flag is not None and stop_flag.is_set():
             break
         if time_budget and time.monotonic() - t0 > time_budget:
+            break
+        if not time_budget and it >= outer_iters:
             break
         if best_seq is not None and it > 0:
             n_pert = max(1, int(frac * half * 4))
@@ -280,9 +282,10 @@ def gs_circulant_ils(k, inner_flips=20000, outer_iters=20, time_budget=None,
     """
     rng = rng or np.random.default_rng()
     best_seq = None; best_f = None; it = 0; t0 = time.monotonic()
-    while it < outer_iters:
+    while True:
         if stop_flag is not None and stop_flag.is_set(): break
         if time_budget and time.monotonic() - t0 > time_budget: break
+        if not time_budget and it >= outer_iters: break
         if best_seq is not None and it > 0:
             n_pert = max(1, int(frac * k * 4))
             seqs = [s.copy() for s in best_seq]

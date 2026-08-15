@@ -136,6 +136,31 @@ def selftest() -> int:
             expect(gz.get("aligned", {}).get("n_h2") is not None,
                    "gerzon result missing aligned H₂ counts")
 
+    # ILS must honour time_budget, not the default 20-restart cap
+    # (Search Studio H.1212 was dying at iter 20 with budget left).
+    import numpy as _np
+    from .. import williamson as _wm
+    from .. import circulant_search as _cs
+    _seen = []
+    _wm.williamson_ils(
+        4, inner_flips=1, time_budget=0.5, rng=_np.random.default_rng(0),
+        progress_callback=lambda d: _seen.append(d.get("iter")),
+    )
+    expect(len(_seen) > 20, f"williamson_ils still capped at 20 (got {len(_seen)})")
+    _seen = []
+    _wm.gs_circulant_ils(
+        4, inner_flips=1, time_budget=0.5, rng=_np.random.default_rng(0),
+        progress_callback=lambda d: _seen.append(d.get("iter")),
+    )
+    expect(len(_seen) > 20, f"gs_circulant_ils still capped at 20 (got {len(_seen)})")
+    _seen = []
+    _cs.search_ils(
+        4, inner_flips=1, time_budget=0.5, rng=_np.random.default_rng(0),
+        progress_callback=lambda d: _seen.append(d.get("iter")),
+    )
+    expect(len(_seen) > 20, f"circulant search_ils still capped at 20 (got {len(_seen)})")
+    print("PASS ILS time_budget outruns the 20-restart cap")
+
     r = client.post(
         "/api/search", json={"engine": "tile", "order": 128, "mode": "sa", "budget_s": 60}
     )

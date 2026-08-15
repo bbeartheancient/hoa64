@@ -243,7 +243,7 @@ export function init(container) {
       )
     ),
     el("div", { class: "row" }, el("label", {}, "order"), el("input", { id: "ss-order", type: "number", value: "64", min: "1" })),
-    el("div", { class: "row" }, el("label", {}, "budget s"), el("input", { id: "ss-budget", type: "number", value: "30", min: "1", step: "1" })),
+    el("div", { class: "row" }, el("label", {}, "budget s"), el("input", { id: "ss-budget", type: "number", value: "300", min: "1", step: "1" })),
     el("div", { class: "row" }, el("label", {}, "seed"), el("input", { id: "ss-seed", type: "number", placeholder: "(random)" })),
     el(
       "div",
