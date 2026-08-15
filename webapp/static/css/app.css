@@ -312,6 +312,22 @@ canvas.sim-canvas {
   width: 100%;
   max-width: 100%;
 }
+/* HOA Studio sphere (+ power-map image): same 1fr square overflow */
+.hoa-viz .hoa-viz-cell {
+  flex: 0 0 auto;
+  width: min(50%, 50vh);
+  max-width: 50%;
+  min-width: 0;
+}
+.hoa-viz canvas.sim-canvas {
+  width: 100%;
+  max-width: 100%;
+}
+.hoa-analyze .power-img {
+  width: min(50%, 50vh);
+  max-width: 50%;
+  height: auto;
+}
 /* antenna tab: smith chart needs more detail than default sim-canvas */
 .ant-cap canvas.smith-canvas { width: 384px; max-width: 100%; }
 .ant-cap canvas.kicad-canvas { width: 384px; max-width: 100%; }

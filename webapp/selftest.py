@@ -1203,6 +1203,11 @@ def selftest() -> int:
         expect("THEMES[currentTheme()].ramp" not in _t
                and "themeRamp()" in _t,
                f"{_tab} post pipeline uses themeRamp()")
+    r = client.get("/js/tabs/hoa_studio.js")
+    expect("hoa-viz" in r.text and "hoa-viz-cell" in r.text,
+           "hoa_studio.js sphere missing half-size class")
+    r = client.get("/css/app.css")
+    expect(".hoa-viz" in r.text, "app.css missing HOA half-size rule")
     print("PASS UI overhaul markers")
 
     # ---------------- static integrity (module-graph regression guard) -----

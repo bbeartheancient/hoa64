@@ -447,7 +447,7 @@ export function init(container) {
 
   const analysisPanel = el(
     "div",
-    { class: "panel" },
+    { class: "panel hoa-analyze" },
     el("h2", {}, "Analysis"),
     el(
       "div",
@@ -459,7 +459,7 @@ export function init(container) {
     (powerImg = el("img", { class: "power-img hidden", alt: "power map" }))
   );
 
-  threeContainer = el("div", { class: "sim-cell" }, el("div", { class: "sim-label" }, "sphere (drag to orbit)"));
+  threeContainer = el("div", { class: "sim-cell hoa-viz-cell" }, el("div", { class: "sim-label" }, "sphere (drag to orbit)"));
   const fxBox = el("input", { type: "checkbox", id: "hoa-fx" });
   fxBox.checked = fxOn;
   fxBox.addEventListener("change", () => {
@@ -471,7 +471,7 @@ export function init(container) {
 
   const viewsPanel = el(
     "div",
-    { class: "panel" },
+    { class: "panel hoa-viz" },
     el("h2", {}, "Sphere"),
     el("div", { class: "panel-row" }, threeContainer)
   );
