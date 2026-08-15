@@ -128,7 +128,8 @@ class PartsReq(BaseModel):
     max_size_mm: float | None = None
     mount: str | None = None
     type: str | None = None
-    partial: bool = False
+    partial: bool | None = None  # None = full cover, then overlap fallback
+    limit: int = 50  # return every in-range row; catalog is tens of parts
 
 
 @router.post("/parts")
@@ -137,17 +138,30 @@ def parts(req: PartsReq) -> dict:
     spec: dict[str, Any] = {
         "f_lo_hz": req.f_lo_mhz * 1e6,
         "f_hi_hz": req.f_hi_mhz * 1e6,
-        "partial": req.partial,
     }
     for key in ("gain_dbi_min", "polarization", "max_size_mm", "mount", "type"):
         val = getattr(req, key)
         if val is not None:
             spec[key] = val
+    limit = max(1, min(50, req.limit))
     try:
-        matches = parts_db.match(spec)
+        if req.partial is True:
+            matches = parts_db.match({**spec, "partial": True}, limit=limit)
+            mode = "overlap"
+        elif req.partial is False:
+            matches = parts_db.match({**spec, "partial": False}, limit=limit)
+            mode = "full"
+        else:
+            matches = parts_db.match({**spec, "partial": False}, limit=limit)
+            mode = "full"
+            if not matches:
+                # 2400–5800 has no single continuous row (dual-band SKUs
+                # are one row per lobe). Fall back to overlapping parts.
+                matches = parts_db.match({**spec, "partial": True}, limit=limit)
+                mode = "overlap"
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return _jsafe({"matches": matches})
+    return _jsafe({"matches": matches, "coverage": mode})
 
 
 # ---------------------------------------------------------------- kicad

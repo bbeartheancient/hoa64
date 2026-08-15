@@ -80,10 +80,13 @@ channel count, and FOA is a normalized H4.
   (Phase 5b: /api/dag
   construction-DAG classification + /api/detbounds achieved-vs-bound,
   both cached/threaded), `routes_antenna.py` (antenna lab under
-  /api/antenna: sync /design recommender + /parts matcher + /kicad
+  /api/antenna: sync /design recommender + /parts matcher (full-cover
+  first, then overlap fallback so a 2400–5800 query still lists every
+  in-range row; dual-band SKUs are one row per lobe) + /kicad
   export [bounded one-shot-per-file token cache, contents in memory] +
   /smith MoM Z_in(f)→Γ(f) sweep [dipole or explicit wire geometry] +
-  /survey SRTM site survey + /survey/map terrain mosaic,
+  /survey + /survey/map (SRTM DEM + Esri imagery; used by the Terrain
+  tab, not an Antenna panel),
   job-based /fields FDTD lab and /evolve Hadamard-seeded topology SA —
   same callback→report/`_BudgetStop`/`params["live"]` wiring as
   routes_sim), `routes_noise.py` (/api/noise: /classes model status,
@@ -164,10 +167,13 @@ channel count, and FOA is a normalized H4.
   Antenna (`js/tabs/antenna.js` — `#ant-layer-select` DESIGN/PARTS/
   FIELDS/EVOLVE/KICAD/SMITH panels; FIELDS/EVOLVE stream job frames over
   `/ws/job/{id}`, DESIGN auto-fires the parts query and exposes one-shot
-  KiCad downloads, KICAD is a standalone export form with per-file
-  download links, SMITH renders the MoM Z_in sweep on an interactive Γ
-  plane with hover readout, SURVEY runs the SRTM virtual site survey
-  with terrain-profile + map overlays; job results keep long payloads
+  KiCad downloads, PARTS formats `size_mm` as L×W×H (arrays must not be
+  passed to `el()` — that threw and painted an empty table) and shows
+  overlap % when `/parts` falls back from full-cover, KICAD is a
+  standalone export form with per-file download links, SMITH renders
+  the MoM Z_in sweep on an interactive Γ plane with hover readout;
+  site survey lives on the Terrain tab (`[GENERATE]`/`[SURVEY]`);
+  job results keep long payloads
   (pattern_png_b64/resonance_note/points) OUT of the DOM — whitelist
   stat rows + [RESULT JSON] blob download; viz canvases capped via
   `.ant-cap` in app.css), Noise (`js/tabs/noise.js` — DiT classifier
@@ -185,9 +191,12 @@ channel count, and FOA is a normalized H4.
   ONE strip chart with `data-series` toggles ([E][E_DEM][E_EXCH][E_ANIS][E_GOAL][T],
   stripchart.js `setVisible`; E_GOAL is flat 0 unless a library goal is
   active) and goal-attraction controls (`sim-goal` [EVOLVE TO LIBRARY
-  GOAL] + `sim-lam-goal`, plus a `tune-lam-goal` live-retune slider); Terrain's layer view sits beside the 3D
-  viewport with per-octave [MUTE]/[SOLO]/[FULL] (`data-oct`, client-side
-  recombination from `layers_f32`, in-place mesh update); Orbitals' XZ
+  GOAL] + `sim-lam-goal`, plus a `tune-lam-goal` live-retune slider); Terrain
+  has a `[GENERATE]`/`[SURVEY]` sidebar switch — GENERATE is Hadamard fBm
+  with per-octave [MUTE]/[SOLO]/[FULL] (`data-oct`, client-side
+  recombination from `layers_f32`, in-place mesh update); SURVEY is the
+  SRTM site survey (path profile left, satellite-textured 3-D link right,
+  blank/same RX probes 8×400 m bearings); Orbitals' XZ
   projection is computed client-side from the point cloud (`splatXZ` →
   heatmap.js). three.js axis
   convention everywhere: ground = XZ, up = +Y — terrain displaces along
@@ -225,9 +234,12 @@ channel count, and FOA is a normalized H4.
   budget at f_lo, medium attenuation e^(−αλ), polarization mismatch,
   viability constraints; composite = product, `explain()` trace),
   `parts_db.py` + `webapp/data/antenna_parts.json` (local curated
-  off-the-shelf antenna DB — everythingRF has no API and 403-blocks
-  scraping, so rows mirror their listing fields and carry `erf_url` deep
-  links; `match(spec)` freq-coverage gate + gain/size scoring),
+  off-the-shelf antenna DB, 57 rows — everythingRF has no API and
+  403-blocks scraping, so rows mirror their listing fields and carry
+  `erf_url` deep links; dual-band parts are one row per lobe;
+  `match(spec)` freq-coverage gate + gain/size scoring; `/api/antenna/parts`
+  with `partial=None` returns full-cover hits, then every overlapping
+  row if the span has no single covering part),
   `fdtd.py` (3-D Yee FDTD: lossy-dielectric Cayley updates, graded
   sponge BC [not CPML], soft sinusoidal point source, air/water/
   air-water-interface media, per-frame |E| mid-plane slices + Stokes
@@ -244,9 +256,12 @@ channel count, and FOA is a normalized H4.
   6h ground margin, S-expr parser validity gate + `kicad-cli pcb
   upgrade` check when available),
   `site_survey.py` (virtual site survey: AWS Open Data SRTM Terrarium
-  tiles [no key, cached to ~/.cache/hoa64/terrain], great-circle path
-  profiles, 4/3-earth bulge + first-Fresnel geometry, Deygout knife-edge
-  diffraction, `em_physics.link_budget` closure → verdict),
+  tiles [no key, cached to ~/.cache/hoa64/terrain], tight DEM window +
+  Esri World Imagery JPEG mosaic [Pillow; cached as PNG under
+  ~/.cache/hoa64/imagery], great-circle path profiles, 4/3-earth bulge
+  + first-Fresnel geometry, Deygout knife-edge diffraction,
+  `em_physics.link_budget` closure → verdict; coincident/blank RX
+  probes eight 400 m bearings and keeps the clearest hop),
   `noise_data.py` (NOISEX-92 noise DB — 15 classes of .mat from
   spib.linse.ufsc.br, cached to ~/.cache/hoa64/noisex92; HTK log-mel
   DSP with fixed dB normalization),

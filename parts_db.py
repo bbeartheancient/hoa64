@@ -108,15 +108,19 @@ def match(spec: dict, db: dict | None = None, limit: int = 10) -> list[dict]:
             continue
 
         note = None
+        cov = 1.0
         if f_lo is not None:
             lo = p["freq_lo_mhz"] * 1e6
             hi = p["freq_hi_mhz"] * 1e6
+            spec_span = max(f_hi - f_lo, 1.0)
+            overlap = max(0.0, min(hi, f_hi) - max(lo, f_lo))
+            cov = overlap / spec_span
             if lo <= f_lo and hi >= f_hi:
-                pass  # full coverage
-            elif partial and lo <= f_hi and hi >= f_lo:
-                note = (f"partial overlap: part covers {p['freq_lo_mhz']:g}–"
-                        f"{p['freq_hi_mhz']:g} MHz, spec "
-                        f"{f_lo / 1e6:g}–{f_hi / 1e6:g} MHz")
+                cov = 1.0
+            elif partial and overlap > 0:
+                note = (f"covers {p['freq_lo_mhz']:g}–{p['freq_hi_mhz']:g} MHz "
+                        f"({100 * cov:.0f}% of "
+                        f"{f_lo / 1e6:g}–{f_hi / 1e6:g} MHz)")
             else:
                 continue
 
@@ -126,11 +130,12 @@ def match(spec: dict, db: dict | None = None, limit: int = 10) -> list[dict]:
             score -= 2.0 * margin      # least excess gain above the ask wins
         score -= 0.05 * maxdim         # weak preference for compact parts
         if note is not None:
-            score -= 25.0              # partial coverage penalty
+            score -= 25.0 * (1.0 - cov)  # penalize by uncovered fraction
 
         row = dict(p)
         row["score"] = round(score, 3)
         row["margin_db"] = margin
+        row["coverage_frac"] = round(cov, 4)
         if note is not None:
             row["coverage_note"] = note
         out.append(row)

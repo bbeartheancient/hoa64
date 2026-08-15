@@ -523,6 +523,14 @@ def selftest() -> int:
     )
     print(f"PASS antenna parts ({len(matches)} matches, all cover 2400–2485)")
 
+    r = client.post("/api/antenna/parts", json={"f_lo_mhz": 2400, "f_hi_mhz": 5800})
+    d = r.json()
+    expect(r.status_code == 200 and len(d["matches"]) >= 4,
+           "wide 2400–5800 should fall back to overlapping parts")
+    expect(d.get("coverage") == "overlap",
+           "2400–5800 coverage mode should be overlap")
+    print(f"PASS antenna parts wide-band fallback ({len(d['matches'])} overlaps)")
+
     r = client.post("/api/antenna/parts", json={"f_lo_mhz": 38000, "f_hi_mhz": 39000})
     d = r.json()
     expect(r.status_code == 200 and d["matches"] == [], "38–39 GHz should match nothing")

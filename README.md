@@ -136,7 +136,9 @@ Tabs:
   antenna lab: DESIGN ranks optimal
   constructions by band + site conditions (exact antenna theory — dipole,
   patch, helix, yagi… with equation traces), PARTS matches a curated
-  off‑the‑shelf parts DB (57 rows, everythingRF deep links), FIELDS runs a
+  off‑the‑shelf parts DB (57 rows, everythingRF deep links; a wide query
+  such as 2400–5800 lists every overlapping row when no part covers the
+  full span — dual‑band SKUs are one row per lobe), FIELDS runs a
   3‑D FDTD Maxwell solver (air/water/interface, live |E| slice viewer +
   E_RMS strip chart), EVOLVE anneals Hadamard‑seeded wire topologies
   scored by a real thin‑wire Method‑of‑Moments solver, SMITH sweeps

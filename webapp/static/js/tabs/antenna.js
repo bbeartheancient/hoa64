@@ -53,7 +53,12 @@ function el(tag, attrs = {}, ...kids) {
     else if (k === "html") n.innerHTML = v;
     else n.setAttribute(k, v);
   }
-  n.append(...kids);
+  n.append(...kids.map((k) => {
+    if (k == null || k === false) return "";
+    if (typeof k === "string" || k instanceof Node) return k;
+    if (Array.isArray(k)) return k.join("×");
+    return String(k);
+  }));
   return n;
 }
 
@@ -332,17 +337,22 @@ async function doParts(quiet = false) {
         el("th", {}, h)
       )
     );
-    const rows = (d.matches || []).map((m) =>
+    const matches = d.matches || [];
+    const rows = matches.map((m) =>
       el(
         "tr",
         m.coverage_note ? { style: "opacity:0.55", title: m.coverage_note } : {},
         el("td", { class: "k" }, m.part),
         el("td", {}, m.mfr || "?"),
         el("td", { class: "dim" }, m.type || "?"),
-        el("td", {}, `${m.freq_lo_mhz}–${m.freq_hi_mhz}`),
+        el("td", {},
+          `${m.freq_lo_mhz}–${m.freq_hi_mhz}` +
+          (m.coverage_frac != null && m.coverage_frac < 1
+            ? ` (${Math.round(m.coverage_frac * 100)}%)`
+            : "")),
         el("td", {}, m.gain_dbi !== undefined ? `${m.gain_dbi} dBi` : "?"),
         el("td", {}, m.vswr !== undefined ? String(m.vswr) : "?"),
-        el("td", { class: "dim" }, m.size_mm || "?"),
+        el("td", { class: "dim" }, Array.isArray(m.size_mm) ? m.size_mm.join("×") : (m.size_mm || "?")),
         el("td", {}, m.mount || "?"),
         el(
           "td",
@@ -357,13 +367,20 @@ async function doParts(quiet = false) {
         )
       )
     );
-    document
-      .getElementById("ant-p-results")
-      .replaceChildren(el("table", { class: "stats" }, head, ...rows));
-    if (!quiet || !(d.matches || []).length)
-      msg(`${(d.matches || []).length} parts matched ${body.f_lo_mhz}–${body.f_hi_mhz} MHz`, "ok");
+    const host = document.getElementById("ant-p-results");
+    if (!matches.length) {
+      host.replaceChildren(el("div", { class: "dim" },
+        `no catalog parts overlap ${body.f_lo_mhz}–${body.f_hi_mhz} MHz` +
+        (body.gain_dbi_min != null ? ` @ ≥ ${body.gain_dbi_min} dBi` : "")));
+    } else {
+      host.replaceChildren(el("table", { class: "stats" }, head, ...rows));
+    }
+    const cov = d.coverage === "overlap"
+      ? `${matches.length} overlap ${body.f_lo_mhz}–${body.f_hi_mhz} MHz (none cover the full span)`
+      : `${matches.length} parts cover ${body.f_lo_mhz}–${body.f_hi_mhz} MHz`;
+    if (!quiet || !matches.length) msg(cov, "ok");
   } catch (e) {
-    if (!quiet) msg(`parts failed: ${e.message}`, "error");
+    msg(`parts failed: ${e.message}`, "error");
   }
 }
 
