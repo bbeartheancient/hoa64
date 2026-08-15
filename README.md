@@ -20,8 +20,10 @@ Micromagnetic Matrix Annealing
 High-Order Ambisonic Field Calculator
 <img width="783" height="293" alt="image" src="https://github.com/user-attachments/assets/4e43c0c5-85c4-4611-b8fa-b069b1b628fb" />
 
+
 fBm Terrain Generator
 <img width="796" height="296" alt="image" src="https://github.com/user-attachments/assets/74bf097a-4fc6-44eb-9532-cd0e5655a2e5" />
+
 
 Atomic Orbital Simulator
 <img width="796" height="296" alt="image" src="https://github.com/user-attachments/assets/6a35601c-65df-4742-baf5-1b08fa69d3a9" />
