@@ -11,6 +11,34 @@ direct integration with SageMath for orders above 2000.
 2000 are constructible except 3 (1212, 1852, 1940) which have been proven
 to exist but have inaccessible construction data.**
 
+Hadamard Matrix Library/Solver
+<img width="784" height="349" alt="image" src="https://github.com/user-attachments/assets/009bc226-fdf1-40d8-aacf-96ae66a1945d" />
+
+Micromagnetic Matrix Annealing
+<img width="783" height="392" alt="image" src="https://github.com/user-attachments/assets/b5608afc-a6d3-45f7-9707-87752524dca6" />
+
+High-Order Ambisonic Field Calculator
+<img width="783" height="293" alt="image" src="https://github.com/user-attachments/assets/4e43c0c5-85c4-4611-b8fa-b069b1b628fb" />
+
+fBm Terrain Generator
+<img width="796" height="296" alt="image" src="https://github.com/user-attachments/assets/74bf097a-4fc6-44eb-9532-cd0e5655a2e5" />
+
+Atomic Orbital Simulator
+<img width="796" height="296" alt="image" src="https://github.com/user-attachments/assets/6a35601c-65df-4742-baf5-1b08fa69d3a9" />
+
+Virtual Site Survey
+<img width="607" height="300" alt="image" src="https://github.com/user-attachments/assets/cfc803fd-05a5-4756-9199-54bb1413775a" />
+
+RF Antenna + Filter Designer
+<img width="614" height="372" alt="image" src="https://github.com/user-attachments/assets/1dd0c671-fc7b-4835-81dd-a8002c92db70" />
+
+Metamaterials Designer
+<img width="796" height="296" alt="image" src="https://github.com/user-attachments/assets/b360cd90-d604-4dfa-81d1-0d92102f9792" />
+
+Intelligent Noise Analyzer
+<img width="796" height="271" alt="image" src="https://github.com/user-attachments/assets/07622c5a-8bef-4c4c-86a7-fd1bb8267f12" />
+
+
 ## Quick Start
 
 ```bash
