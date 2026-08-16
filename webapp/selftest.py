@@ -111,6 +111,9 @@ def selftest() -> int:
     d = wait_terminal(r.json()["job_id"], 15.0)
     expect(d["status"] == "done", f"maxdet job status {d['status']}")
     expect(d["result"]["ok"] and d["result"]["stats"]["is_hadamard"], "maxdet result not hadamard")
+    st = d["result"]["stats"]
+    expect(st.get("det_bound") is not None and st.get("det_log10") is not None,
+           "search stats missing det_bound/det_log10 (Matrix Lab toFixed)")
     expect(base64.b64decode(d["result"]["png_b64"])[:8] == PNG_MAGIC, "maxdet png bad magic")
     print("PASS search maxdet(8)")
     done_job = r.json()["job_id"]
@@ -1216,6 +1219,8 @@ def selftest() -> int:
            "matrix_lab in-place 2D→3D transmute morph")
     expect("ml-engine" in r.text and "SEARCH_ENGINES" in r.text,
            "matrix_lab missing search algorithm panel")
+    expect("det_bound ?? s.det_bound_log10" in r.text,
+           "matrix_lab showStats must fall back when det_bound is missing")
     r = client.get("/js/tabs/search_studio.js")
     expect("run-viz" in r.text, "search_studio unified run panel")
     expect("export function deactivate" in r.text, "search_studio closes the job socket")

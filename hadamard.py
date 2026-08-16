@@ -151,6 +151,7 @@ def check(H: np.ndarray, det: bool = False) -> dict:
         f=int((np.sum(G * G) - n**3) // 2),
         max_row_sum=int(np.abs(A.sum(axis=1)).max()),
         det_bound_log10=det_bound_log10(n),
+        det_bound=det_bound_log10(n),
     )
     if det:
         res["det_log10"] = det_log10(A)

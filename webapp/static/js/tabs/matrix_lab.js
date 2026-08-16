@@ -59,16 +59,17 @@ function showStats(d) {
   rows.push(statRow("is_hadamard", s.is_hadamard, s.is_hadamard ? "good" : "bad"));
   rows.push(statRow("max_off", s.max_off));
   rows.push(statRow("f", s.f));
-  if (s.det_log10 !== undefined && s.det_log10 !== null) {
-    const pct = ((s.det_log10 / s.det_bound) * 100).toFixed(1);
+  const bound = s.det_bound ?? s.det_bound_log10;
+  if (s.det_log10 !== undefined && s.det_log10 !== null && bound != null) {
+    const pct = ((s.det_log10 / bound) * 100).toFixed(1);
     rows.push(
       statRow(
         "det_log10",
-        `${s.det_log10.toFixed(2)} / ${s.det_bound.toFixed(2)} (${pct}% of bound)`
+        `${Number(s.det_log10).toFixed(2)} / ${Number(bound).toFixed(2)} (${pct}% of bound)`
       )
     );
-  } else {
-    rows.push(statRow("det_bound_log10", s.det_bound?.toFixed(2)));
+  } else if (bound != null) {
+    rows.push(statRow("det_bound_log10", Number(bound).toFixed(2)));
   }
   rows.push(
     statRow("h2_all_balanced", s.h2_all_balanced, s.h2_all_balanced ? "good" : "bad")
