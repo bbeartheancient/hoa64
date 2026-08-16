@@ -18,6 +18,7 @@ SEARCH_ENGINES = (
     "holographic",
     "crown",
     "brillouin",
+    "sudoku",
     "williamson",
     "gs",
     "circulant",

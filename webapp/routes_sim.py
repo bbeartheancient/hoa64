@@ -243,6 +243,14 @@ def _run_segment(algo: str, order: int, p: dict, rng, cur, goal, live, cb, stop)
             max_steps=max_steps, lam_b=float(p.get("lam_b", 1.0)),
             rng=rng, start=cur, callback=cb, stop_flag=stop,
         )
+    if algo == "sudoku":
+        from .. import sudoku
+        return sudoku.sudoku_sa(
+            order, T_start=T_start, T_end=T_end, cooling=cooling,
+            max_steps=max_steps,
+            method=p.get("method") or "stochastic",
+            rng=rng, start=cur, callback=cb, stop_flag=stop,
+        )
     if algo == "maxdet":
         from ..hadamard import local_search, random_seed as _rs
         H0 = cur if cur is not None else _rs(order, rng)

@@ -108,6 +108,7 @@ python3 -m hoa64.cli webapp
 | `holographic.py` | Holographic entropy S = A/(4ℓₚ²) of volume V; search uses (S/S_*−1)² |
 | `crown.py` | Spherical-crown diffraction (Liu 2022 OPSF + 2-D FFT) cell SA |
 | `brillouin.py` | Brillouin-zone folding (Guan 2026): X→Γ period-doubling, fold coherence, weave CD |
+| `sudoku.py` | Sudoku solvers remapped to Hadamard rows (backtrack, overlay, CSP, DLX, residuals) |
 | `actual_size.py` | Press 1980 actual size from e, ħ, G, m_e, m_p — L, R⊕, T, pitch = L/n |
 | `webapp/` | FastAPI + vanilla‑JS web GUI (see Webapp below) |
 | `rh.py` | RH |Δₙ| bound checker |
@@ -137,6 +138,7 @@ python3 -m hoa64.cli webapp
 - **Holographic** — S = A/(4ℓₚ²) is the entropy of volume V (A = area of ∂V); the SA residual is the scale-free (S/S_* − 1)²
 - **Crown** — spherical-crown diffraction (occlusion-utilizing PSF, 2-D FFT)
 - **Brillouin** — Guan 2026 zone folding: period doubling folds X onto Γ; fold coherence + weave CD; Materials lab reports the same on the Walsh lattice
+- **Sudoku** — Wikipedia Sudoku solvers with the goal changed from digits/boxes to pairwise-orthogonal ±1 rows (backtrack, pattern overlay, CSP, exact cover / dancing links, residuals, stochastic)
 - **RNN‑guided** — LSTM scores candidate seeds before micromag descent
 - **Signature‑guided** — predicted block signature seeds from trained model
 
@@ -168,11 +170,11 @@ Tabs:
   cw/gcp/row_builder), Search panel with the full engine list, pixel‑art
   preview, ℍ³ transmute (row‑simplex PCA → Poincaré ball with geodesics)
 - **Search Studio** — launch max‑det/micromag/tile/Gerzon/holographic/crown/
-  brillouin search jobs, live progress over WebSocket, mid‑run retune,
+  brillouin/sudoku search jobs, live progress over WebSocket, mid‑run retune,
   export to library; one Run panel (matrix + E/BEST/T waveforms,
   Micromag‑style series toggles)
 - **Micromag Sim** — annealing lab; algorithm select runs any search
-  engine (micromag/tile/gerzon/holographic/crown/brillouin/maxdet/
+  engine (micromag/tile/gerzon/holographic/crown/brillouin/sudoku/maxdet/
   williamson/gs/circulant) with live site‑energy/gradient/flux
   heatmaps, waveforms, and library‑goal evolution (E_goal/goal_agree).
   Flux of Sylvester (and any A⊗H₈) is a 4‑tile H.8 tessellation — the

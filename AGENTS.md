@@ -19,7 +19,7 @@ same modules:
    prime-power field extensions, Williamson, Miyamoto, propus,
    Cooper-Wallis, Goethals-Seidel, Kronecker products) plus heuristic search
    engines (max-det descent, micromagnetic SA, tile-based SA, Williamson/GS
-   FFT PSD minimization, RNN-guided search). 807 orders verified up to 3984;
+   FFT PSD minimization, Sudoku-style row solvers, RNN-guided search). 807 orders verified up to 3984;
    gaps below 2000: 1212, 1852, 1940 (existence proven, data inaccessible —
    note `matrices/hadamard_1852.csv.gz` now ships a Djokovic 1992 solution).
 
@@ -448,6 +448,9 @@ channel count, and FOA is a normalized H4.
   occlusion utilizing, d_m / d_m-max, 2-D FFT propagate; SA + ILS),
   `brillouin.py` (Guan 2026 BZF: period doubling folds X onto Γ;
   fold_coherence / weave CD; SA + ILS; Materials lab stats),
+  `sudoku.py` (Wikipedia Sudoku solvers remapped to Hadamard rows:
+  backtrack, pattern overlay, CSP, exact cover / dancing links,
+  residuals, stochastic SA; SA + ILS),
   `actual_size.py` (Press 1980: L, R⊕, T from e, ħ, G, m_e, m_p, ε;
   Materials [ACTUAL SIZE] sets pitch = L/n),
   `rnn_hadamard.py` and `sig_predictor.py` (PyTorch LSTM fitness models),

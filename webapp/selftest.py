@@ -58,7 +58,8 @@ def selftest() -> int:
     expect(r.status_code == 200, "GET /api/algorithms")
     cat = r.json()
     expect(cat == _algo_cat(), "GET /api/algorithms != algorithms.catalog()")
-    expect("brillouin" in cat["search"] and "holographic" in cat["sim"],
+    expect("brillouin" in cat["search"] and "holographic" in cat["sim"]
+           and "sudoku" in cat["search"] and "sudoku" in cat["sim"],
            "algorithm catalog missing new engines")
     expect(set(cat["search"]) == set(cat["sim"]),
            "search and sim catalogs drifted")
@@ -135,6 +136,7 @@ def selftest() -> int:
     # ILS-mode engines must stream per-iteration frames ({"iter","f","best_f"})
     for eng, order in (("micromag", 4), ("tile", 4), ("gerzon", 4),
                        ("holographic", 4), ("crown", 4), ("brillouin", 4),
+                       ("sudoku", 4),
                        ("williamson", 8), ("gs", 8), ("circulant", 4)):
         r = client.post("/api/search", json={"engine": eng, "order": order, "budget_s": 3})
         expect(r.status_code == 200, f"POST /api/search {eng} ils")
@@ -163,6 +165,10 @@ def selftest() -> int:
             bz = d["result"].get("brillouin") or {}
             expect(bz.get("fold_coherence") is not None,
                    "brillouin result missing fold_coherence")
+        if eng == "sudoku" and d.get("result", {}).get("ok"):
+            su = d["result"].get("sudoku") or {}
+            expect(su.get("n_ortho_pairs") is not None,
+                   "sudoku result missing n_ortho_pairs")
 
     # ILS must honour time_budget, not the default 20-restart cap
     # (Search Studio H.1212 was dying at iter 20 with budget left).
