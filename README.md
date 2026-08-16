@@ -164,13 +164,16 @@ python3 -m hoa64.webapp.selftest
 
 Tabs:
 
-- **Matrix Lab** — construct/verify matrices, pixel‑art preview, ℍ³
-  transmute (row‑simplex PCA → Poincaré ball with geodesics)
+- **Matrix Lab** — construct/verify matrices (auto/sylvester/paley/miyamoto/
+  cw/gcp/row_builder), Search panel with the full engine list, pixel‑art
+  preview, ℍ³ transmute (row‑simplex PCA → Poincaré ball with geodesics)
 - **Search Studio** — launch max‑det/micromag/tile/Gerzon/holographic/crown/
   brillouin search jobs, live progress over WebSocket, mid‑run retune,
   export to library; one Run panel (matrix + E/BEST/T waveforms,
   Micromag‑style series toggles)
-- **Micromag Sim** — annealing lab with live site‑energy/gradient/flux
+- **Micromag Sim** — annealing lab; algorithm select runs any search
+  engine (micromag/tile/gerzon/holographic/crown/brillouin/maxdet/
+  williamson/gs/circulant) with live site‑energy/gradient/flux
   heatmaps, waveforms, and library‑goal evolution (E_goal/goal_agree).
   Flux of Sylvester (and any A⊗H₈) is a 4‑tile H.8 tessellation — the
   (0,0) block is exactly `flux_map(H₈)`, the other three differ only

@@ -500,6 +500,13 @@ def _validate(engine: str, order: int) -> str | None:
     return None
 
 
+@router.get("/algorithms")
+def algorithms_get() -> dict:
+    """Search / construct / sim algorithm catalogs (UI dropdowns)."""
+    from ..algorithms import catalog
+    return catalog()
+
+
 @router.post("/search")
 def search_start(req: SearchReq) -> dict:
     if req.engine not in _ENGINES:

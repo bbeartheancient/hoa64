@@ -44,6 +44,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from .. import micromag
+from ..algorithms import SIM_ALGORITHMS
 from ..hadamard import perturb, random_seed, sylvester
 from ._png import heatmap_png, matrix_png
 from .jobs import JOBS, Job, report
@@ -184,6 +185,108 @@ def _sim_reporter(job: Job, order: int, field_every: int,
     return cb
 
 
+def _run_segment(algo: str, order: int, p: dict, rng, cur, goal, live, cb, stop):
+    """One cool-down of the selected algorithm. Returns (H, info).
+
+    ``info`` always has steps / accepts / best_E / hadamard so the
+    reheat loop stays algorithm-agnostic.
+    """
+    T_start = p.get("T_start", 10.0)
+    T_end = p.get("T_end", 0.01)
+    cooling = p.get("cooling", 0.999)
+    max_steps = int(p.get("max_steps", 10**9))
+    if algo == "micromag":
+        return micromag.micromag_sa(
+            order, T_start=T_start, T_end=T_end, cooling=cooling,
+            lam_ex=float(p.get("lam_ex", 0.0)),
+            lam_ani=float(p.get("lam_ani", 0.0)),
+            n_swap=int(p.get("n_swap", 3)),
+            max_steps=max_steps, rng=rng, start=cur, goal=goal,
+            lam_goal=float(p.get("lam_goal", 0.5)),
+            lam_tile=float(p.get("lam_tile", 0.0)),
+            lam_z=float(p.get("lam_z", 0.0)),
+            lam_h=float(p.get("lam_h", 0.0)),
+            callback=cb, stop_flag=stop, live_params=live,
+        )
+    if algo == "tile":
+        from .. import tile_search
+        return tile_search.tile_sa_swap(
+            order, T_start=T_start, T_end=T_end, cooling=cooling,
+            max_steps=max_steps, rng=rng, start=cur,
+            callback=cb, stop_flag=stop,
+        )
+    if algo == "gerzon":
+        from .. import gerzon
+        return gerzon.gerzon_sa(
+            order, T_start=T_start, T_end=T_end, cooling=cooling,
+            max_steps=max_steps, lam_z=float(p.get("lam_z", 1.0)),
+            rng=rng, start=cur, callback=cb, stop_flag=stop,
+        )
+    if algo == "holographic":
+        from .. import holographic
+        return holographic.holo_sa(
+            order, T_start=T_start, T_end=T_end, cooling=cooling,
+            max_steps=max_steps, lam_h=float(p.get("lam_h", 1.0)),
+            rng=rng, start=cur, callback=cb, stop_flag=stop,
+        )
+    if algo == "crown":
+        from .. import crown
+        return crown.crown_sa(
+            order, T_start=T_start, T_end=T_end, cooling=cooling,
+            max_steps=max_steps, lam_c=float(p.get("lam_c", 1.0)),
+            rng=rng, start=cur, callback=cb, stop_flag=stop,
+        )
+    if algo == "brillouin":
+        from .. import brillouin
+        return brillouin.bzf_sa(
+            order, T_start=T_start, T_end=T_end, cooling=cooling,
+            max_steps=max_steps, lam_b=float(p.get("lam_b", 1.0)),
+            rng=rng, start=cur, callback=cb, stop_flag=stop,
+        )
+    if algo == "maxdet":
+        from ..hadamard import local_search, random_seed as _rs
+        H0 = cur if cur is not None else _rs(order, rng)
+        H, st = local_search(
+            H0, max_flips=max_steps, callback=cb, stop_flag=stop,
+        )
+        f = float(st.get("f", math.inf))
+        return H, {
+            "steps": int(st.get("flips", 0)),
+            "accepts": int(st.get("flips", 0)),
+            "best_E": f,
+            "hadamard": f == 0.0,
+        }
+    if algo in ("williamson", "gs"):
+        from .. import williamson as wm
+        k = order // 4
+        search = wm.williamson_search if algo == "williamson" else wm.gs_circulant_search
+        a, b, c, d, st = search(
+            k, max_flips=max_steps, callback=cb, stop_flag=stop, rng=rng,
+        )
+        H, _method = wm.williamson_to_hadamard(k, a, b, c, d)
+        f = float(st.get("f", math.inf))
+        return H, {
+            "steps": int(st.get("flips", 0)),
+            "accepts": int(st.get("flips", 0)),
+            "best_E": f,
+            "hadamard": bool(st.get("is_williamson") or st.get("is_gs") or f < 1e-6),
+        }
+    if algo == "circulant":
+        from .. import circulant_search as cs
+        a, f, flips, _ = cs.psd_search(
+            order, max_flips=max_steps, callback=cb, stop_flag=stop, rng=rng,
+        )
+        H = cs.circulant_matrix(np.round(a).astype(np.int8))
+        f = float(f)
+        return H, {
+            "steps": int(flips),
+            "accepts": int(flips),
+            "best_E": f,
+            "hadamard": f < 1e-6,
+        }
+    raise ValueError(f"unknown sim algorithm {algo!r}")
+
+
 def _run_sim(job: Job):
     p = job.params
     order = p["order"]
@@ -241,28 +344,12 @@ def _run_sim(job: Job):
             stats["step"] = stats.get("step", 0) + _off
             _base(stats)
 
-        H, info = micromag.micromag_sa(
-            sim_order,
-            T_start=p.get("T_start", 10.0),
-            T_end=p.get("T_end", 0.01),
-            cooling=p.get("cooling", 0.999),
-            lam_ex=lam_ex0,
-            lam_ani=lam_ani0,
-            n_swap=int(p.get("n_swap", 3)),
-            max_steps=int(p.get("max_steps", 10**9)),
-            rng=rng,
-            start=cur,
-            goal=goal,
-            lam_goal=float(p.get("lam_goal", 0.5)),
-            lam_tile=float(p.get("lam_tile", 0.0)),
-            lam_z=float(p.get("lam_z", 0.0)),
-            callback=cb,
-            stop_flag=stop,
-            live_params=live,
+        H, info = _run_segment(
+            p.get("algorithm", "micromag"), sim_order, p, rng, cur, goal, live, cb, stop,
         )
-        step_off += info["steps"]
-        agg["steps"] += info["steps"]
-        agg["accepts"] += info["accepts"]
+        step_off += int(info.get("steps") or 0)
+        agg["steps"] += int(info.get("steps") or 0)
+        agg["accepts"] += int(info.get("accepts") or 0)
         agg["segments"] += 1
         if info["best_E"] < best_E:
             best_H, best_E = H, info["best_E"]
@@ -301,6 +388,8 @@ class SimReq(BaseModel):
     lam_goal: float = 0.5
     lam_tile: float = 0.0
     lam_z: float = 0.0
+    lam_h: float = 0.0
+    algorithm: str = "micromag"
 
 
 @router.post("/sim/micromag")
@@ -309,6 +398,20 @@ def sim_start(req: SimReq) -> dict:
         raise HTTPException(
             status_code=400, detail=f"order must be a multiple of 4, 4 ≤ n ≤ {MAX_ORDER}"
         )
+    if req.algorithm not in SIM_ALGORITHMS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown algorithm {req.algorithm!r} (have: {list(SIM_ALGORITHMS)})",
+        )
+    if req.algorithm in ("williamson", "gs") and req.order % 4 != 0:
+        raise HTTPException(status_code=400, detail=f"{req.algorithm} needs order = 4k")
+    if req.algorithm == "circulant":
+        u = int(math.isqrt(req.order // 4)) if req.order % 4 == 0 else 0
+        if req.order % 4 != 0 or u * u != req.order // 4:
+            raise HTTPException(
+                status_code=400,
+                detail="circulant needs order = 4u²",
+            )
     if req.start not in ("random", "sylvester", "library"):
         raise HTTPException(status_code=400, detail=f"unknown start method {req.start!r}")
     if req.start == "sylvester" and sylvester(req.order) is None:
@@ -372,6 +475,8 @@ def sim_start(req: SimReq) -> dict:
         "lam_goal": req.lam_goal,
         "lam_tile": req.lam_tile,
         "lam_z": req.lam_z,
+        "lam_h": req.lam_h,
+        "algorithm": req.algorithm,
         "live": {},
     }
     if req.goal_order is not None:

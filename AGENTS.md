@@ -47,7 +47,8 @@ channel count, and FOA is a normalized H4.
   `routes_hadamard.py` (/api construction/verify/library endpoints +
   /api/viz/hadamard-space ℍ³ transmute),
   `routes_search.py` (Phase 2: /api/search job endpoints + `/ws/job/{id}`
-  progress WebSocket with mid-run micromag retune via `job.params["live"]`),
+  progress WebSocket with mid-run micromag retune via `job.params["live"]`;
+  `GET /api/algorithms` is the shared search/construct/sim catalog),
   `routes_sim.py` (Phase 3: /api/sim/micromag annealing lab with live
   `site_energy`/`energy_gradient`/`flux_map`/`gerzon.Z_wall` heatmap
   frames; optional `goal_order` (= `order`, must be in the library)

@@ -16,13 +16,16 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { retintCanvas, fillPlusOne, themeColor, currentTheme, themeRamp, getSetting, setSetting } from "/js/theme.js";
 import { makePostPipeline, hexToRgb01 } from "/js/viz/shaders.js";
+import { connect } from "/js/ws.js";
+import { CONSTRUCT_METHODS, SEARCH_ENGINES } from "/js/algorithms.js";
 
 // cgb → "dmg": the 4-shade DMG-style grid fits the CGB LCD look (Feature 6)
 const THEME_POST = { mono: "crt", green: "crt", amber: "crt", plasma: "crt", dmg: "dmg", cgb: "dmg", vga: "off" };
 
-const METHODS = ["auto", "sylvester", "paley", "miyamoto", "cw", "gcp", "row_builder"];
+const METHODS = CONSTRUCT_METHODS;
 
 let canvas, ctx, msgEl, statsEl, csvLink, currentOrder = null;
+let searchWs = null, searchJob = null, searchStatusEl;
 
 function el(tag, attrs = {}, ...kids) {
   const n = document.createElement(tag);
@@ -134,6 +137,71 @@ async function doConstruct() {
     msg(d.ok ? `constructed order ${d.order} via ${d.method}` : d.error, d.ok ? "ok" : "error");
   } catch (e) {
     msg(`construct failed: ${e.message}`, "error");
+  }
+}
+
+function handleSearchFrame(d) {
+  if (d.type === "snapshot") {
+    for (const m of d.history || []) handleSearchFrame(m);
+    return;
+  }
+  if (d.type === "progress") {
+    if (d.matrix_png_b64) {
+      const img = new Image();
+      img.onload = () => {
+        ctx.imageSmoothingEnabled = false;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        retintCanvas(canvas);
+      };
+      img.src = `data:image/png;base64,${d.matrix_png_b64}`;
+    }
+    const bits = [];
+    if (d.iter !== undefined) bits.push(`iter ${d.iter}`);
+    if (d.step !== undefined) bits.push(`step ${d.step}`);
+    const best = d.best_E ?? d.best_f;
+    if (best !== undefined) bits.push(`best ${Number(best).toPrecision(4)}`);
+    if (searchStatusEl) searchStatusEl.textContent = bits.join(" · ") || "running";
+    return;
+  }
+  if (d.type === "end") {
+    if (searchStatusEl) searchStatusEl.textContent = `job ${d.status}`;
+    finishSearch();
+  }
+}
+
+async function finishSearch() {
+  if (!searchJob) return;
+  try {
+    const d = await api(`/api/search/${searchJob}`);
+    const r = d.result || {};
+    if (r.ok && r.png_b64) {
+      showResult(r);
+      currentOrder = r.order;
+      msg(`found Hadamard order ${r.order} via ${r.engine}`, "ok");
+    } else {
+      msg(`search finished — no Hadamard (best ${r.best_f ?? r.best_E ?? "?"})`, "");
+    }
+  } catch (e) {
+    msg(`search result failed: ${e.message}`, "error");
+  }
+}
+
+async function doSearch() {
+  const engine = document.getElementById("ml-engine").value;
+  const order = parseInt(document.getElementById("order").value, 10);
+  const budget_s = parseFloat(document.getElementById("ml-budget").value) || 30;
+  if (searchWs) searchWs.close();
+  fillPlusOne(canvas);
+  msg("searching…");
+  if (searchStatusEl) searchStatusEl.textContent = "connecting…";
+  try {
+    const { job_id } = await api("/api/search", { engine, order, budget_s, mode: "ils" });
+    searchJob = job_id;
+    msg(`job ${job_id} running`, "ok");
+    searchWs = connect(`/ws/job/${job_id}`, { message: handleSearchFrame });
+  } catch (e) {
+    msg(`search failed: ${e.message}`, "error");
   }
 }
 
@@ -566,6 +634,24 @@ export function init(container) {
     (msgEl = el("div", { class: "msg" }))
   );
 
+  const searchPanel = el(
+    "div",
+    { class: "panel" },
+    el("h2", {}, "Search"),
+    el(
+      "div",
+      { class: "row" },
+      el("label", {}, "algorithm"),
+      el("select", { id: "ml-engine" },
+        ...SEARCH_ENGINES.map((e) => el("option", { value: e }, e)))
+    ),
+    el("div", { class: "row" }, el("label", {}, "budget s"),
+      el("input", { id: "ml-budget", type: "number", value: "30", min: "1" })),
+    el("div", { class: "btn-row" },
+      el("button", { class: "btn", id: "btn-search" }, "Search")),
+    (searchStatusEl = el("div", { class: "status-line" }, "idle"))
+  );
+
   const verifyPanel = el(
     "div",
     { class: "panel" },
@@ -662,7 +748,7 @@ export function init(container) {
   const lab = el(
     "div",
     { class: "lab" },
-    el("div", {}, constructPanel, verifyPanel, exportPanel, statsPanel),
+    el("div", {}, constructPanel, searchPanel, verifyPanel, exportPanel, statsPanel),
     el("div", {}, el("div", { class: "canvas-wrap" }, canvas, spWrap), spacePanel)
   );
   container.replaceChildren(lab);
@@ -670,6 +756,7 @@ export function init(container) {
 
   document.getElementById("btn-construct").addEventListener("click", doConstruct);
   document.getElementById("btn-library").addEventListener("click", doLoadLibrary);
+  document.getElementById("btn-search").addEventListener("click", doSearch);
   document.getElementById("sp-transmute").addEventListener("click", doTransmute);
   document.getElementById("btn-png").addEventListener("click", doDownloadPng);
   document.getElementById("verify-file").addEventListener("change", (e) => {
@@ -688,4 +775,6 @@ window.addEventListener("hoa64:payload", (e) => {
 export function deactivate() {
   // called by main.js on tab switch — release the ℍ³ view's GL context
   disposeSpace();
+  if (searchWs) searchWs.close();
+  searchWs = null;
 }

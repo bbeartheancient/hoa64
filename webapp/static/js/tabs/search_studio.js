@@ -8,9 +8,9 @@
 import { connect } from "/js/ws.js";
 import { makeStripChart } from "/js/viz/stripchart.js";
 import { retintCanvas, fillPlusOne } from "/js/theme.js";
+import { SEARCH_ENGINES } from "/js/algorithms.js";
 
-const ENGINES = ["maxdet", "micromag", "tile", "gerzon", "holographic", "crown",
-                 "brillouin", "williamson", "gs", "circulant"];
+const ENGINES = SEARCH_ENGINES;
 
 let msgEl, statusEl, statsEl, previewCanvas, previewCtx;
 let waveChart, tunePanel, cancelBtn, exportBtn;

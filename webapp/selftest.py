@@ -53,6 +53,21 @@ def selftest() -> int:
     expect(d["ok"] and d["stats"]["is_hadamard"], "construct gcp(4, seed=1)")
     print("PASS construct gcp(4)")
 
+    from ..algorithms import catalog as _algo_cat
+    r = client.get("/api/algorithms")
+    expect(r.status_code == 200, "GET /api/algorithms")
+    cat = r.json()
+    expect(cat == _algo_cat(), "GET /api/algorithms != algorithms.catalog()")
+    expect("brillouin" in cat["search"] and "holographic" in cat["sim"],
+           "algorithm catalog missing new engines")
+    expect(set(cat["search"]) == set(cat["sim"]),
+           "search and sim catalogs drifted")
+    js = client.get("/js/algorithms.js").text
+    for name in cat["search"]:
+        expect(f'"{name}"' in js, f"algorithms.js missing {name}")
+    print(f"PASS algorithms catalog ({len(cat['search'])} search, "
+          f"{len(cat['construct'])} construct)")
+
     r = client.post("/api/verify", json={"matrix": paley(12).tolist()})
     d = r.json()
     expect(d["ok"] and d["stats"]["is_hadamard"], "verify paley(12) matrix")
@@ -1193,12 +1208,17 @@ def selftest() -> int:
     r = client.get("/js/tabs/matrix_lab.js")
     expect("startMorph" in r.text and "sp-overlay" in r.text,
            "matrix_lab in-place 2D→3D transmute morph")
+    expect("ml-engine" in r.text and "SEARCH_ENGINES" in r.text,
+           "matrix_lab missing search algorithm panel")
     r = client.get("/js/tabs/search_studio.js")
     expect("run-viz" in r.text, "search_studio unified run panel")
     expect("export function deactivate" in r.text, "search_studio closes the job socket")
+    expect("SEARCH_ENGINES" in r.text, "search_studio not using shared engine list")
     r = client.get("/js/tabs/micromag_sim.js")
     expect("sim-layer-select" in r.text and "data-layer" in r.text,
            "micromag layer select")
+    expect("sim-algo" in r.text and "SIM_ALGORITHMS" in r.text,
+           "micromag sim missing algorithm select")
     expect("sim-wave-select" in r.text and "data-series" in r.text
            and "waveChart" in r.text, "micromag unified waveform + series select")
     r = client.get("/js/viz/stripchart.js")
@@ -1320,7 +1340,10 @@ def selftest() -> int:
     # unknown /api/* paths must 404 (never fall through to StaticFiles 405).
     frontend_calls = [
         ("POST", "/api/search", {"engine": "maxdet", "order": 8, "budget_s": 2}),
+        ("GET", "/api/algorithms", None),
         ("POST", "/api/sim/micromag", {"order": 8, "budget_s": 2, "start": "sylvester"}),
+        ("POST", "/api/sim/micromag", {"order": 8, "budget_s": 2, "start": "sylvester",
+                                       "algorithm": "gerzon"}),
         ("GET", "/api/sim/flux-tiles?order=16&start=sylvester", None),
         ("GET", "/api/sim/gerzon?order=16&start=sylvester", None),
         ("POST", "/api/materials/design", {"kind": "cloth", "order": 8, "start": "sylvester"}),

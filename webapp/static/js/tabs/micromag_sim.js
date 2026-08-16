@@ -18,6 +18,7 @@ import { connect } from "/js/ws.js";
 import { makeStripChart } from "/js/viz/stripchart.js";
 import { retintCanvas, fillPlusOne, themeColor } from "/js/theme.js";
 import { ELECTRIC_FRAG, FLUX_FRAG, makeShaderCanvas, hexToRgb01 } from "/js/viz/shaders.js";
+import { SIM_ALGORITHMS } from "/js/algorithms.js";
 
 let msgEl, statusEl, statsEl, cancelBtn, exportBtn;
 let matrixCanvas, fieldCanvas, fieldLabel;
@@ -504,6 +505,7 @@ async function doStart() {
     budget_s: numVal("sim-budget", 30),
     field_every_steps: parseInt(document.getElementById("sim-field-every").value, 10),
     start: document.getElementById("sim-start").value,
+    algorithm: document.getElementById("sim-algo").value,
   };
   if (seedRaw !== "") body.seed = parseInt(seedRaw, 10);
   const goalSel = document.getElementById("sim-goal-order").value;
@@ -589,6 +591,13 @@ export function init(container) {
     { class: "panel" },
     el("h2", {}, "Micromagnetic annealing"),
     el("div", { class: "row" }, el("label", {}, "order"), el("input", { id: "sim-order", type: "number", value: "64", min: "4", step: "4" })),
+    el(
+      "div",
+      { class: "row" },
+      el("label", {}, "algorithm"),
+      el("select", { id: "sim-algo" },
+        ...SIM_ALGORITHMS.map((a) => el("option", { value: a }, a)))
+    ),
     el(
       "div",
       { class: "row" },
