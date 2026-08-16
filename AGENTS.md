@@ -117,7 +117,9 @@ channel count, and FOA is a normalized H4.
   (cloth/touchpad/
   metamaterial from H.8 flux tiles + /kicad; materials boards skip the
   B.Cu GND pour so reverse-layer cells stay discrete, and the response
-  carries `preview_board` for the FOOTPRINT/BOARD toggle),
+  carries `preview_board` for the FOOTPRINT/BOARD toggle; design
+  payload includes Brillouin X→Γ fold/CD; `GET /actual-size` is Press
+  1980 L/R⊕/T and the L/n pitch),
   `routes_noise.py` (/api/noise: /classes lists 19 labels — 15 NOISEX-92
   + 4 synthesized RF baseband envelopes ble/wifi/zigbee/lora — plus
   `live_sources` availability from rf_capture;
@@ -216,9 +218,11 @@ channel count, and FOA is a normalized H4.
   Materials (`js/tabs/materials.js` — `#mat-layer-select` CLOTH/TOUCH/META:
   two-layer yarn, mutual-cap electrodes, spin-ice unit cell + Walsh
   lattice from `materials.py`; gap_frac and flux-tile size (4/8/16) are
-  exposed in the Source panel; KiCad export via design_type=materials,
-  FOOTPRINT/BOARD preview toggle after export — board preview is the
-  generated `.kicad_pcb` with discrete B.Cu pads, no GND pour),
+  exposed in the Source panel; `#mat-actual` stamps Press 1980 pitch
+  L/n; stats show BZ fold coherence / weave CD; KiCad export via
+  design_type=materials, FOOTPRINT/BOARD preview toggle after export —
+  board preview is the generated `.kicad_pcb` with discrete B.Cu pads,
+  no GND pour),
   Filter (`js/tabs/filter.js` — `#flt-layer-select` DESIGN/EVOLVE/KICAD:
   per-kind TOPOLOGY select (stepped-Z LPF, gap+stub HPF, hairpin BPF,
   open-stub BSF + lumped lc/dc_lc/c_shunt/qw_tl/rc/crc/rl); S21/S11
@@ -441,6 +445,10 @@ channel count, and FOA is a normalized H4.
   domain-wall area on the ±1 grid; SA + ILS),
   `crown.py` (Liu 2022 spherical-crown diffraction: RS kernel, OPSF
   occlusion utilizing, d_m / d_m-max, 2-D FFT propagate; SA + ILS),
+  `brillouin.py` (Guan 2026 BZF: period doubling folds X onto Γ;
+  fold_coherence / weave CD; SA + ILS; Materials lab stats),
+  `actual_size.py` (Press 1980: L, R⊕, T from e, ħ, G, m_e, m_p, ε;
+  Materials [ACTUAL SIZE] sets pitch = L/n),
   `rnn_hadamard.py` and `sig_predictor.py` (PyTorch LSTM fitness models),
   `game_of_hadamard.py` (construction DAG viz; `classify_orders` feeds
   /api/dag), `matrix_viz.py`

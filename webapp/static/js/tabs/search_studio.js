@@ -10,7 +10,7 @@ import { makeStripChart } from "/js/viz/stripchart.js";
 import { retintCanvas, fillPlusOne } from "/js/theme.js";
 
 const ENGINES = ["maxdet", "micromag", "tile", "gerzon", "holographic", "crown",
-                 "williamson", "gs", "circulant"];
+                 "brillouin", "williamson", "gs", "circulant"];
 
 let msgEl, statusEl, statsEl, previewCanvas, previewCtx;
 let waveChart, tunePanel, cancelBtn, exportBtn;
@@ -145,6 +145,10 @@ async function finishRun() {
       const cr = r.crown;
       if (cr && cr.E_c != null)
         rows.push(statRow("crown E_c", Number(cr.E_c).toPrecision(4)));
+      const bz = r.brillouin;
+      if (bz && bz.fold_coherence != null)
+        rows.push(statRow("BZ fold", Number(bz.fold_coherence).toFixed(3),
+          bz.fold_coherence > 0.8 ? "good" : ""));
       statsEl.replaceChildren(...rows);
       exportBtn.style.display = "";
       exportBtn.disabled = false;

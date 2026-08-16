@@ -98,6 +98,18 @@ function renderStats(d) {
     rows.push(statRow("H.8 agree", `${(t.h8_agree * 100).toFixed(1)}%`, t.kronecker_h8 ? "good" : ""));
   if (Array.isArray(t.counts))
     rows.push(statRow("tile counts", t.counts.join(" / ")));
+  const bz = d.brillouin;
+  if (bz && bz.fold_coherence != null) {
+    rows.push(statRow("BZ fold", Number(bz.fold_coherence).toFixed(3),
+      bz.fold_coherence > 0.8 ? "good" : ""));
+    if (bz.Q != null) rows.push(statRow("BZ Q", Number(bz.Q).toFixed(0)));
+    if (bz.CD != null) rows.push(statRow("weave CD", Number(bz.CD).toFixed(3)));
+  }
+  const sz = d.actual_size;
+  if (sz && sz.L_cm != null) {
+    rows.push(statRow("actual L", `${Number(sz.L_cm).toPrecision(3)} cm`));
+    rows.push(statRow("actual pitch", `${Number(sz.pitch_mm).toPrecision(3)} mm`));
+  }
   host.replaceChildren(...rows);
   renderKey(d.key);
 }
@@ -172,6 +184,23 @@ async function doDesign() {
   }
 }
 
+async function doActualSize() {
+  const order = parseInt(document.getElementById("mat-order").value, 10);
+  msg("Press 1980 actual size…");
+  try {
+    const d = await api(`/api/materials/actual-size?order=${order}`);
+    const elp = document.getElementById("mat-pitch");
+    if (elp && d.pitch_mm != null) elp.value = Number(d.pitch_mm).toPrecision(4);
+    msg(
+      `actual size: L=${Number(d.L_cm).toPrecision(3)} cm · T=${Number(d.T_K).toFixed(0)} K · pitch ${Number(d.pitch_mm).toPrecision(3)} mm`,
+      "ok"
+    );
+    await doDesign();
+  } catch (e) {
+    msg(`actual size failed: ${e.message}`, "error");
+  }
+}
+
 async function doKicad() {
   const btn = document.getElementById("mat-kicad");
   btn.disabled = true;
@@ -236,7 +265,8 @@ export function init(container) {
         el("option", { value: "16" }, "16×16"))),
     el("div", { class: "btn-row" },
       el("button", { class: "btn", id: "mat-run" }, "Generate"),
-      el("button", { class: "btn", id: "mat-kicad" }, "Export KiCad"))
+      el("button", { class: "btn", id: "mat-kicad" }, "Export KiCad"),
+      el("button", { class: "btn", id: "mat-actual" }, "Actual size"))
   );
   const view = el("div", { class: "panel" },
     el("h2", {}, "Layout"),
@@ -264,6 +294,7 @@ export function init(container) {
   selectLayer("cloth");
   document.getElementById("mat-run").addEventListener("click", doDesign);
   document.getElementById("mat-kicad").addEventListener("click", doKicad);
+  document.getElementById("mat-actual").addEventListener("click", doActualSize);
   document.getElementById("mat-prev-fp").addEventListener("click", () => {
     kicadPreviewMode = "footprint";
     syncKicadPreviewBtns();

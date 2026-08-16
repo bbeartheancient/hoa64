@@ -119,7 +119,7 @@ def selftest() -> int:
 
     # ILS-mode engines must stream per-iteration frames ({"iter","f","best_f"})
     for eng, order in (("micromag", 4), ("tile", 4), ("gerzon", 4),
-                       ("holographic", 4), ("crown", 4),
+                       ("holographic", 4), ("crown", 4), ("brillouin", 4),
                        ("williamson", 8), ("gs", 8), ("circulant", 4)):
         r = client.post("/api/search", json={"engine": eng, "order": order, "budget_s": 3})
         expect(r.status_code == 200, f"POST /api/search {eng} ils")
@@ -144,6 +144,10 @@ def selftest() -> int:
             cr = d["result"].get("crown") or {}
             expect(cr.get("E_c") is not None,
                    "crown result missing E_c")
+        if eng == "brillouin" and d.get("result", {}).get("ok"):
+            bz = d["result"].get("brillouin") or {}
+            expect(bz.get("fold_coherence") is not None,
+                   "brillouin result missing fold_coherence")
 
     # ILS must honour time_budget, not the default 20-restart cap
     # (Search Studio H.1212 was dying at iter 20 with budget left).
@@ -1002,6 +1006,16 @@ def selftest() -> int:
     expect(r.status_code == 200 and "MATERIALS LAB" in r.text, "materials.js tab")
     expect("mat-prev-toggle" in r.text and "lastKicadPreviewBoard" in r.text,
            "materials.js missing FOOTPRINT/BOARD toggle")
+    expect("mat-actual" in r.text and "doActualSize" in r.text,
+           "materials.js missing Actual size")
+    r = client.get("/api/materials/actual-size?order=16")
+    expect(r.status_code == 200, f"GET actual-size: {r.status_code}")
+    asz = r.json()
+    expect(asz.get("L_cm") and asz.get("pitch_mm"), f"actual-size payload {asz}")
+    md = client.post("/api/materials/design",
+                     json={"kind": "cloth", "order": 16, "start": "sylvester"}).json()
+    expect((md.get("brillouin") or {}).get("fold_coherence") is not None,
+           "materials design missing brillouin fold")
     r = client.get("/")
     expect('data-tab="materials"' in r.text, "index materials tab")
     print(f"PASS materials lab (cloth/touch/meta + kicad {len(mk['files'])} files, "
@@ -1310,6 +1324,7 @@ def selftest() -> int:
         ("GET", "/api/sim/flux-tiles?order=16&start=sylvester", None),
         ("GET", "/api/sim/gerzon?order=16&start=sylvester", None),
         ("POST", "/api/materials/design", {"kind": "cloth", "order": 8, "start": "sylvester"}),
+        ("GET", "/api/materials/actual-size?order=16", None),
         ("POST", "/api/materials/kicad", {"kind": "cloth", "order": 8, "start": "sylvester"}),
         ("POST", "/api/hoa/speakers", {"preset": "ring8", "order": 3}),
         ("POST", "/api/hoa/scene", {"sources": [{"az": 30, "el": 10, "freq": 440}],

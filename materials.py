@@ -451,6 +451,17 @@ def design(kind: str, order: int, start: str = "sylvester",
     out["start"] = start
     out["tiles"] = flux_tiles(H, tile=tile)
     out["key"] = MAP_KEY
+    try:
+        from .brillouin import analyze as bzf_analyze
+        out["brillouin"] = bzf_analyze(H)
+    except Exception:
+        out["brillouin"] = None
+    try:
+        from .actual_size import analyze as size_analyze
+        out["actual_size"] = size_analyze(order)
+        out["actual_size"]["pitch_used_mm"] = pitch
+    except Exception:
+        out["actual_size"] = None
     return out
 
 

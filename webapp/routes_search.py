@@ -327,6 +327,38 @@ def _run_crown(job: Job):
     return H, {"best_f": best_f, "is_hadamard": bool(ok)}
 
 
+@_register("brillouin")
+def _run_brillouin(job: Job):
+    from .. import brillouin
+
+    p = job.params
+    order = p["order"]
+    rng = np.random.default_rng(p.get("seed"))
+    stop = _BudgetStop(job)
+    lam_b = float(p.get("lam_b", 1.0))
+    if p.get("mode") == "sa":
+        def _once(*, start, callback, stop_flag, rng):
+            return brillouin.bzf_sa(
+                order,
+                T_start=p.get("T_start", 20.0),
+                cooling=p.get("cooling", 0.9995),
+                max_steps=int(p.get("max_steps", 10**9)),
+                lam_b=lam_b,
+                callback=callback,
+                stop_flag=stop_flag,
+                rng=rng,
+                start=start,
+            )
+        H, info = _reheat_sa(job, order, rng, _once)
+        return H, {"best_E": info.get("best_E"), "info": info}
+    H, best_f, ok = brillouin.bzf_ils(
+        order, time_budget=p["budget_s"], lam_b=lam_b,
+        stop_flag=stop, rng=rng,
+        progress_callback=_sa_reporter(job, order),
+    )
+    return H, {"best_f": best_f, "is_hadamard": bool(ok)}
+
+
 def _run_quad(job: Job, search, ils, to_hadamard):
     """Shared runner for the Williamson / Goethals-Seidel engines."""
     p = job.params
@@ -417,6 +449,12 @@ def _package_result(job: Job, H, info: dict, label: str) -> dict:
             cr = crown_analyze(H)
         except Exception:
             cr = None
+        bz = None
+        try:
+            from ..brillouin import analyze as bzf_analyze
+            bz = bzf_analyze(H)
+        except Exception:
+            bz = None
         return {
             "ok": True,
             "order": n,
@@ -426,6 +464,7 @@ def _package_result(job: Job, H, info: dict, label: str) -> dict:
             "gerzon": gz,
             "holographic": ho,
             "crown": cr,
+            "brillouin": bz,
             "png_b64": base64.b64encode(matrix_png(H, 512)).decode("ascii"),
         }
     return {"ok": False, **_jsafe(info)}

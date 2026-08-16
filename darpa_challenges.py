@@ -129,6 +129,8 @@ ALIGNMENT: list[dict] = [
         {"module": "gerzon.py", "tab": "search_studio"},
         {"module": "holographic.py", "tab": "search_studio"},
         {"module": "crown.py", "tab": "search_studio"},
+        {"module": "brillouin.py", "tab": "search_studio"},
+        {"module": "actual_size.py", "tab": "materials"},
      ],
      "note": "The whole search stack is non-convex optimization: micromagnetic SA, Hadamard-seeded filter_sa, ILS max-det descent, H2-cell tile SA, Gerzon AB cell SA. Heuristics, not algebraic-geometry systematics."},
     {"n": 9, "status": "none", "engines": [],

@@ -63,6 +63,18 @@ def _build(req: DesignReq) -> dict:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
 
+@router.get("/actual-size")
+def actual_size_get(order: int = 16, eps: float = 0.003) -> dict:
+    """Press 1980 actual-size scales; pitch so n cells span L."""
+    if not (4 <= order <= 256) or order % 4 != 0:
+        raise HTTPException(status_code=400, detail="order must be 4k, 4..256")
+    try:
+        from ..actual_size import analyze as size_analyze
+        return _jsafe(size_analyze(order, eps=eps))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
 @router.post("/design")
 def design(req: DesignReq) -> dict:
     d = _build(req)
@@ -75,6 +87,8 @@ def design(req: DesignReq) -> dict:
         "tiles": d["tiles"],
         "preview": d["preview"],
         "key": d.get("key"),
+        "brillouin": d.get("brillouin"),
+        "actual_size": d.get("actual_size"),
     })
 
 
